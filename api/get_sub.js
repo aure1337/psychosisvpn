@@ -1,12 +1,38 @@
-import { createClient } from '@supabase/supabase-js'
-const supabase = createClient(process.env.S_URL, process.env.S_KEY)
+const { createClient } = require('@supabase/supabase-js');
+
+if (!process.env.S_URL || !process.env.S_KEY) {
+  throw new Error('Missing Supabase credentials: S_URL or S_KEY');
+}
+
+const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
 export default async function handler(req, res) {
   try {
     const { id } = req.query;
-    const { data: sub } = await supabase.from('vpn_subs').select('*').eq('id', id).single();
     
-    if (!sub) return res.status(404).send('Subscription not found');
+    if (!id) {
+      console.error('Missing id parameter');
+      return res.status(400).send('Missing id parameter');
+    }
+
+    console.log('Fetching subscription with id:', id);
+    const { data: sub, error: subError } = await supabase
+      .from('vpn_subs')
+      .select('*')
+      .eq('id', id)
+      .single();
+    
+    if (subError) {
+      console.error('Supabase error:', subError);
+      return res.status(404).send(`Subscription not found: ${subError.message}`);
+    }
+
+    if (!sub) {
+      console.error('No subscription found for id:', id);
+      return res.status(404).send('Subscription not found');
+    }
+
+    console.log('Subscription found:', sub.id);
 
     const expiryDate = new Date(sub.expires_at);
     const now = new Date();
@@ -55,9 +81,13 @@ export default async function handler(req, res) {
     ].join('\n');
     
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', `inline; filename="${profileTitle}.txt"`);
+    // Filename без кириллицы чтобы избежать ошибки
+    res.setHeader('Content-Disposition', `inline; filename="Psychosis VPN.txt"`);
     res.send(config);
   } catch (error) {
     console.error('Handler error:', error);
     res.status(500).send('Internal server error: ' + error.message);
   }
+}
+
+module.exports = handler;
