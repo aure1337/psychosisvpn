@@ -75,7 +75,8 @@ export default async function handler(req, res) {
         .from('vpn_servers')
         .update({ 
           name: name, 
-          vless_url: vless_url 
+          vless_url: vless_url,
+          sort_index: parseInt(sort_index)
         })
         .eq('id', id);
       
