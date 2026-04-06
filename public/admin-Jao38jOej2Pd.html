@@ -281,25 +281,34 @@ async function moveUp(id) {
     loadServers();
 }
 
-        async function saveAllInCategory(type) {
-            const container = document.getElementById('list-' + type);
-            const nameInputs = container.querySelectorAll('input[data-id]');
-            
-            for (let input of nameInputs) {
-                const id = input.getAttribute('data-id');
-                const name = document.getElementById('srv-name-' + id).value;
-                const vless = document.getElementById('srv-vless-' + id).value;
-                
-                await fetch('/api/manage_servers', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    // Передаем и имя, и vless_url
-                    body: JSON.stringify({ action: 'rename', id, name, vless_url: vless })
-                });
-            }
-            alert('База категории ' + type.toUpperCase() + ' обновлена!');
-            loadServers();
+async function saveAllInCategory(type) {
+    const container = document.getElementById('list-' + type);
+    const nameInputs = container.querySelectorAll('input[data-id]');
+    
+    console.log(`Начинаю обновление категории: ${type.toUpperCase()}`); // Лог старта
+    
+    for (let input of nameInputs) {
+        const id = input.getAttribute('data-id');
+        const name = document.getElementById('srv-name-' + id).value;
+        const vless = document.getElementById('srv-vless-' + id).value;
+        
+        console.log(`Отправка данных сервера ID ${id}:`, { name, vless_url: vless }); // Лог отправки
+        
+        try {
+            const res = await fetch('/api/manage_servers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ action: 'rename', id, name, vless_url: vless })
+            });
+            const result = await res.json();
+            console.log(`Результат для ID ${id}:`, result); // Лог ответа сервера
+        } catch (error) {
+            console.error(`Ошибка при сохранении сервера ${id}:`, error);
         }
+    }
+    alert('База категории ' + type.toUpperCase() + ' обновлена!');
+    loadServers();
+}
 
         async function addServer() {
     const raw = document.getElementById('srv_vless').value;
