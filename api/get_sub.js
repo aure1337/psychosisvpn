@@ -57,8 +57,11 @@ export default async function handler(req, res) {
   const totalBytes = (sub.total_gb || 0) * 1024 * 1024 * 1024;
   const announce = sub.custom_announce || `@psychosisvpnm | Тариф: ${currentTariff} | До: ${dateFormatted}`;
   
+  // 🔧 ИСПРАВЛЕНИЕ: Динамический profile-title со статусом и тарифом
+  const profileTitle = `Psychosis VPN - ${currentTariff} (${days > 0 ? days : 0}д)`;
+  
   const config = [
-    `profile-title: Psychosis VPN`,
+    `profile-title: ${profileTitle}`,
     `profile-update-interval: 1`,
     `support-url: https://t.me/aure_ember`,
     `#announce: ${announce}`,
