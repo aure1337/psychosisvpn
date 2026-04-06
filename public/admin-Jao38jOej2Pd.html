@@ -235,7 +235,7 @@ async function loadServers() {
     const res = await fetch('/api/manage_servers?action=list');
     let data = await res.json();
     
-    // Сортируем полученные данные по sort_index, чтобы видеть актуальный порядок
+    // Сортируем локально перед показом
     data.sort((a, b) => (a.sort_index || 0) - (b.sort_index || 0));
     
     ['base', 'white', 'both'].forEach(type => {
@@ -244,14 +244,18 @@ async function loadServers() {
         const filtered = data.filter(s => s.tariff_type === type);
         list.innerHTML = filtered.map(s => `
             <div class="srv-row" id="row-${s.id}">
-                <div class="flex justify-between items-center gap-4">
-                    <div class="flex items-center gap-2 flex-grow">
-                        <button onclick="moveUp('${s.id}')" class="text-zinc-500 hover:text-white transition-all p-1">
-                            <i class="fas fa-arrow-up text-[10px]"></i>
-                        </button>
-                        <input type="text" id="srv-name-${s.id}" data-id="${s.id}" value="${s.name}" class="bg-transparent border-none font-black text-sm text-white w-full outline-none focus:text-red-500">
+                <div class="flex justify-between items-center gap-2">
+                    <div class="flex items-center gap-3 flex-grow">
+                        <input type="number" id="srv-sort-${s.id}" value="${s.sort_index || 0}" 
+                               class="w-12 h-8 bg-red-950/20 border border-red-900/30 rounded text-[10px] text-center font-bold text-red-500 focus:border-red-600 outline-none"
+                               title="Порядок сортировки">
+                        
+                        <input type="text" id="srv-name-${s.id}" data-id="${s.id}" value="${s.name}" 
+                               class="bg-transparent border-none font-black text-sm text-white w-full outline-none focus:text-red-500">
                     </div>
-                    <button onclick="deleteSrv('${s.id}')" class="text-zinc-800 hover:text-red-600 transition-all p-2"><i class="fas fa-trash-alt text-xs"></i></button>
+                    <button onclick="deleteSrv('${s.id}')" class="text-zinc-800 hover:text-red-600 transition-all p-2">
+                        <i class="fas fa-trash-alt text-xs"></i>
+                    </button>
                 </div>
                 <textarea id="srv-vless-${s.id}" class="bg-[#050000] border border-white/5 text-[9px] font-mono text-zinc-600 w-full p-2 rounded-lg resize-none h-12 focus:text-zinc-300 outline-none">${s.vless_url}</textarea>
             </div>
@@ -285,28 +289,31 @@ async function saveAllInCategory(type) {
     const container = document.getElementById('list-' + type);
     const nameInputs = container.querySelectorAll('input[data-id]');
     
-    console.log(`Начинаю обновление категории: ${type.toUpperCase()}`); // Лог старта
+    console.log(`Сохранение категории: ${type.toUpperCase()}`);
     
     for (let input of nameInputs) {
         const id = input.getAttribute('data-id');
         const name = document.getElementById('srv-name-' + id).value;
         const vless = document.getElementById('srv-vless-' + id).value;
-        
-        console.log(`Отправка данных сервера ID ${id}:`, { name, vless_url: vless }); // Лог отправки
+        const sort = document.getElementById('srv-sort-' + id).value;
         
         try {
-            const res = await fetch('/api/manage_servers', {
+            await fetch('/api/manage_servers', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ action: 'rename', id, name, vless_url: vless })
+                body: JSON.stringify({ 
+                    action: 'rename', 
+                    id, 
+                    name, 
+                    vless_url: vless,
+                    sort_index: parseInt(sort) // Добавляем индекс в запрос
+                })
             });
-            const result = await res.json();
-            console.log(`Результат для ID ${id}:`, result); // Лог ответа сервера
-        } catch (error) {
-            console.error(`Ошибка при сохранении сервера ${id}:`, error);
+        } catch (e) {
+            console.error("Ошибка сохранения сервера " + id, e);
         }
     }
-    alert('База категории ' + type.toUpperCase() + ' обновлена!');
+    alert('Категория ' + type.toUpperCase() + ' успешно сохранена!');
     loadServers();
 }
 
