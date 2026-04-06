@@ -55,7 +55,7 @@ export default async function handler(req, res) {
   let links = sub.custom_servers ? sub.custom_servers + '\n' + serverLinks : serverLinks;
   
   const totalBytes = (sub.total_gb || 0) * 1024 * 1024 * 1024;
-  const announce = sub.custom_announce || `Поддержка: @aure_ember | Тариф: ${currentTariff} | До: ${dateFormatted}`;
+  const announce = sub.custom_announce || `Поддержка: @aure_ember | Тариф: ${currentTariff} | Осталось: ${days} дн.`;
   
   const config = [
     `#profile-title: Psychosis VPN`,
