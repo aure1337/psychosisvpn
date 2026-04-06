@@ -8,24 +8,25 @@ export default async function handler(req, res) {
 
   const diff = new Date(sub.expires_at) - new Date();
   const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+  const daysText = days > 0 ? `${days} дн.` : "Истекла";
 
-  // Твои названия тарифов
-  const tMap = { 'base': 'Впн', 'white': 'Белый список', 'both': 'Обход + Впн' };
-  const currentTariff = tMap[sub.tariff_type] || sub.tariff_type;
-
-  // Твоя прошлая логика анонса
-  const announce = sub.custom_announce || `@psychosisvpn | Тариф: ${currentTariff} | До: ${sub.expires_at}`;
-
-  // Сбор серверов
-  let query = supabase.from('vpn_servers').select('*').order('created_at', { ascending: false });
+  // Сортируем общие сервера по приоритету (чем выше число, тем выше сервер)
+  let query = supabase.from('vpn_servers').select('*').order('priority', { ascending: false });
   if (sub.tariff_type === 'base') query = query.eq('tariff_type', 'base');
   else if (sub.tariff_type === 'white') query = query.eq('tariff_type', 'white');
   const { data: servers } = await query;
 
-  let links = (servers || []).map(s => `${s.vless_url}#${encodeURIComponent(s.name)}`).join('\n');
-  if (sub.custom_servers) links = sub.custom_servers + '\n' + links;
+  let commonLinks = (servers || []).map(s => `${s.vless_url}#${encodeURIComponent(s.name)}`).join('\n');
+  
+  // КЛЕИМ: Сначала личные (custom), потом общие
+  let links = "";
+  if (sub.custom_servers) links += sub.custom_servers + '\n';
+  links += commonLinks;
 
-  // Твой формат конфига
+  const tMap = { 'base': 'Впн', 'white': 'Белый список', 'both': 'Обход + Впн' };
+  const currentTariff = tMap[sub.tariff_type] || sub.tariff_type;
+  const announce = sub.custom_announce || `@psychosisvpnm | Тариф: ${currentTariff} | До: ${sub.expires_at}`;
+
   const config = [
     `profile-title: Psychosis VPN`,
     `profile-update-interval: 1`,
