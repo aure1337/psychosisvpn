@@ -6,7 +6,7 @@ if (!process.env.S_URL || !process.env.S_KEY) {
 
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     const { id } = req.query;
     
@@ -71,11 +71,11 @@ export default async function handler(req, res) {
     const profileTitle = `Psychosis VPN - ${currentTariff} (${days > 0 ? days : 0}д)`;
     
     const config = [
-      `profile-title: ${profileTitle}`,
-      `profile-update-interval: 1`,
-      `support-url: https://t.me/aure_ember`,
+      `#profile-title: ${profileTitle}`,
+      `#profile-update-interval: 1`,
+      `#support-url: https://t.me/aure_ember`,
       `#announce: ${announce}`,
-      `subscription-userinfo: upload=0; download=0; total=${totalBytes}; expire=${expireTimestamp}`,
+      `#subscription-userinfo: upload=0; download=0; total=${totalBytes}; expire=${expireTimestamp}`,
       ``,
       links
     ].join('\n');
@@ -88,6 +88,4 @@ export default async function handler(req, res) {
     console.error('Handler error:', error);
     res.status(500).send('Internal server error: ' + error.message);
   }
-}
-
-module.exports = handler;
+};
