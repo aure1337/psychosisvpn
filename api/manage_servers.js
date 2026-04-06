@@ -43,11 +43,16 @@ export default async function handler(req, res) {
   }
 
   // 5. ПЕРЕИМЕНОВАНИЕ / ОБНОВЛЕНИЕ ДАННЫХ
-  if (action === 'rename') {
-    await supabase.from('vpn_servers').update({ 
-      name: name, 
-      vless_url: vless_url 
-    }).eq('id', id);
+if (action === 'rename') {
+    const { data, error } = await supabase
+      .from('vpn_servers')
+      .update({ 
+        name: name, 
+        vless_url: vless_url // Обновляем и ссылку тоже
+      })
+      .eq('id', id);
+    
+    if (error) return res.status(500).json({ error: error.message });
     return res.json({ success: true });
   }
 
