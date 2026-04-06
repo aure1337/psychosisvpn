@@ -13,15 +13,16 @@ export default async function handler(req, res) {
   const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
   const expireTimestamp = Math.floor(expiryDate.getTime() / 1000);
 
-  // Новые названия тарифов
-  const tMap = { 
-    'both': 'Обход+Впн', 
-    'white': 'Обход', 
-    'base': 'Базовый Впн' 
-  };
+  // Формат даты ДД.ММ.ГГГГ
+  const dateFormatted = expiryDate.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  });
+
+  const tMap = { 'both': 'Обход+Впн', 'white': 'Обход', 'base': 'Базовый Впн' };
   const currentTariff = tMap[sub.tariff_type] || sub.tariff_type;
   
-  // Если зашли через браузер — показываем статус и кнопки импорта
   const userAgent = req.headers['user-agent'] || '';
   if (userAgent.includes('Mozilla') && !req.headers['x-requested-with']) {
       const subUrl = `https://${req.headers.host}/api/get_sub?id=${id}`;
@@ -33,33 +34,28 @@ export default async function handler(req, res) {
                   <p style="opacity:0.7;">Статус: <span style="color:#0f0;font-weight:bold;">${days > 0 ? 'Действует' : 'Истекла'}</span></p>
                   <div style="background:#110505;padding:15px;border-radius:20px;margin:20px 0;text-align:left;font-size:14px;border:1px solid #200;">
                       <div style="margin-bottom:8px;">Тариф: <b>${currentTariff}</b></div>
-                      <div>До: <b>${sub.expires_at}</b> (${days > 0 ? days : 0} дн.)</div>
+                      <div>До: <b>${dateFormatted}</b> (${days > 0 ? days : 0} дн.)</div>
                   </div>
                   <div style="display:flex;flex-direction:column;gap:12px;">
                       <a href="happ://import/${subUrl}" style="background:#f00;color:#fff;text-decoration:none;padding:15px;border-radius:15px;font-weight:900;font-size:13px;">ОТКРЫТЬ В HAPP (iOS/Andr)</a>
                       <a href="v2raytun://import/${subUrl}" style="background:#fff;color:#000;text-decoration:none;padding:15px;border-radius:15px;font-weight:900;font-size:13px;">ОТКРЫТЬ В V2RAYTUN</a>
-                      <button onclick="navigator.clipboard.writeText('${subUrl}');alert('Скопировано!')" style="background:transparent;color:#444;border:1px solid #222;padding:10px;border-radius:12px;cursor:pointer;font-size:11px;">Копировать ссылку для Windows</button>
                   </div>
               </div>
           </body>
       `);
   }
 
-  // Запрос от приложения: Сортировка по дате (чтобы не прыгали)
-  let query = supabase.from('vpn_servers').select('*').order('created_at', { ascending: true });
+  // СОРТИРОВКА ПО sort_index (чтобы порядок был как в админке)
+  let query = supabase.from('vpn_servers').select('*').order('sort_index', { ascending: true });
   if (sub.tariff_type === 'base') query = query.eq('tariff_type', 'base');
   else if (sub.tariff_type === 'white') query = query.eq('tariff_type', 'white');
   const { data: servers } = await query;
 
   let serverLinks = (servers || []).map(s => `${s.vless_url}#${encodeURIComponent(s.name)}`).join('\n');
-  
-  // Личные (custom) сервера всегда В НАЧАЛО
-  let links = "";
-  if (sub.custom_servers) links += sub.custom_servers + '\n';
-  links += serverLinks;
+  let links = sub.custom_servers ? sub.custom_servers + '\n' + serverLinks : serverLinks;
   
   const totalBytes = (sub.total_gb || 0) * 1024 * 1024 * 1024;
-  const announce = sub.custom_announce || `@psychosisvpnm | Тариф: ${currentTariff} | До: ${sub.expires_at}`;
+  const announce = sub.custom_announce || `@psychosisvpnm | Тариф: ${currentTariff} | До: ${dateFormatted}`;
   
   const config = [
     `profile-title: Psychosis VPN`,
@@ -72,6 +68,7 @@ export default async function handler(req, res) {
   ].join('\n');
   
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent('Psychosis VPN')}`);
+  // Чтобы title менялся в приложении, имя файла тоже должно быть Psychosis VPN
+  res.setHeader('Content-Disposition', `attachment; filename="Psychosis VPN"`);
   res.send(Buffer.from(config).toString('base64'));
 }
