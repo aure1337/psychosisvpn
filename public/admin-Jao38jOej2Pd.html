@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Psychosis VPN | admin</title>
+    <title>Psychosis VPN | Command Center</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -16,25 +16,33 @@
         input:focus { border-color: #ff0000 !important; }
         .nav-btn { color: #401010; font-weight: 900; transition: 0.3s; cursor: pointer; border: 1px solid transparent; }
         .nav-btn.active { color: #fff; background: #900 !important; border-color: #f00; box-shadow: 0 0 30px rgba(150,0,0,0.4); }
+        
+        /* Карточка подписки */
         .sub-card { background: #0d0202; border: 1px solid #1a0505; border-radius: 2rem; padding: 1.5rem; transition: 0.3s; }
         .sub-card:hover { border-color: #601010; transform: translateY(-3px); }
         .badge { font-size: 8px; font-weight: 900; text-transform: uppercase; padding: 3px 8px; border-radius: 6px; }
         .badge-base { background: #300; color: #f55; }
         .badge-white { background: #003; color: #55f; }
         .badge-both { background: #330; color: #ff5; }
+
+        /* Стили серверов */
         .tariff-container { background: #0d0202; border: 1px solid #200505; border-radius: 2rem; margin-bottom: 2rem; width: 100%; overflow: hidden; }
         .tariff-header { padding: 1.5rem 2rem; border-bottom: 1px solid #1a0505; display: flex; justify-content: space-between; items: center; }
         .srv-row { border-bottom: 1px solid #150202; padding: 1.2rem 2rem; transition: 0.2s; display: flex; flex-direction: column; gap: 10px; }
+        .srv-row:hover { background: #120303; }
+
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body class="p-4 lg:p-10">
+
     <div class="max-w-7xl mx-auto">
         <header class="flex flex-col lg:flex-row justify-between items-center mb-16 gap-6">
             <div class="flex items-center gap-4">
                 <div class="w-16 h-16 bg-red-600 rounded-2xl flex items-center justify-center text-3xl font-black text-white italic shadow-lg">P</div>
                 <h1 class="text-3xl font-black italic uppercase tracking-tighter text-white">Psychosis <span class="text-red-600">VPN</span></h1>
             </div>
+            
             <nav class="flex gap-2 p-1 bg-[#0a0202] rounded-2xl border border-red-900/20">
                 <div id="nav-create" class="nav-btn active px-8 py-4 rounded-xl text-[10px] uppercase tracking-widest">Выпуск</div>
                 <div id="nav-subs" class="nav-btn px-8 py-4 rounded-xl text-[10px] uppercase tracking-widest">Подписки</div>
@@ -44,17 +52,21 @@
 
         <div id="tab-create" class="tab-content active">
             <div class="glass p-10 rounded-[3rem] border-t-2 border-red-600 max-w-4xl mx-auto shadow-2xl">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="space-y-1">
-                        <label class="text-[9px] text-zinc-600 uppercase font-bold tracking-widest ml-2">Client Name</label>
+                        <label class="text-[9px] text-zinc-600 uppercase font-bold tracking-widest ml-2">App Title</label>
+                        <input type="text" id="p_title" value="Psychosis VPN" class="p-5 rounded-2xl font-bold w-full" placeholder="Psychosis VPN">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] text-zinc-600 uppercase font-bold tracking-widest ml-2">Client Name (для тебя)</label>
                         <input type="text" id="p_internal" class="p-5 rounded-2xl font-bold w-full" placeholder="Напр: Вася (TG)">
                     </div>
                     <div class="space-y-1">
                         <label class="text-[9px] text-zinc-600 uppercase font-bold tracking-widest ml-2">Plan selection</label>
                         <select id="p_tariff" class="p-5 rounded-2xl font-bold text-sm w-full cursor-pointer">
-                            <option value="base">📡 Впн</option>
-                            <option value="white">🛡️ Белый список</option>
-                            <option value="both">👑 Обход + Впн</option>
+                            <option value="base">📡 Wi-Fi Base</option>
+                            <option value="white">🛡️ White List (Обход)</option>
+                            <option value="both">👑 FULL (Base + White)</option>
                         </select>
                     </div>
                     <div class="space-y-1">
@@ -71,200 +83,260 @@
         </div>
 
         <div id="tab-subs" class="tab-content">
-            <div id="subs_container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+            <div id="subs_container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                </div>
         </div>
 
         <div id="tab-servers" class="tab-content">
             <div class="glass p-8 rounded-[2.5rem] mb-12 flex flex-col md:flex-row gap-6 items-end sticky top-6 z-10 shadow-2xl">
                 <div class="flex-grow w-full">
-                    <textarea id="srv_vless" class="w-full h-20 p-4 rounded-2xl text-[10px] font-mono leading-relaxed" placeholder="vless://...#Название"></textarea>
+                    <textarea id="srv_vless" class="w-full h-20 p-4 rounded-2xl text-[10px] font-mono leading-relaxed" placeholder="vless://...#Psychosis Vpn | 1 🇷🇺"></textarea>
                 </div>
                 <div class="w-full md:w-64">
                     <select id="srv_type" class="w-full p-5 rounded-xl font-bold text-xs uppercase cursor-pointer h-[60px]">
-                        <option value="base">📡 Впн</option>
-                        <option value="white">🛡️ Белый список</option>
-                        <option value="both">👑 Обход + Впн</option>
+                        <option value="base">📡 Wi-Fi Base</option>
+                        <option value="white">🛡️ White List</option>
+                        <option value="both">👑 Full / VIP</option>
                     </select>
                 </div>
                 <button onclick="addServer()" class="bg-white text-black font-black px-12 py-5 rounded-2xl text-[10px] uppercase hover:bg-red-600 hover:text-white transition-all h-[60px]">Добавить</button>
             </div>
+
             <div class="space-y-12">
-                <div class="tariff-container shadow-2xl border-l-4 border-red-600" id="cat-base">
+                
+                <div class="tariff-container shadow-2xl border-l-4 border-red-600 bg-[#0a0202]">
                     <div class="tariff-header bg-red-950/10">
-                        <h2 class="font-black uppercase text-red-600 italic text-xs">📡 Впн Servers</h2>
+                        <h2 class="font-black uppercase text-red-600 italic tracking-widest text-xs">📡 Wi-Fi Base Servers</h2>
+                        <button onclick="saveAllInCategory('base')" class="bg-red-600 text-white text-[9px] font-black px-6 py-2 rounded-full uppercase hover:bg-red-500 transition-all">Save Base</button>
                     </div>
-                    <div id="list-base"></div>
+                    <div id="list-base" class="min-h-[100px]"></div>
                 </div>
-                <div class="tariff-container shadow-2xl border-l-4 border-blue-600" id="cat-white">
+
+                <div class="tariff-container shadow-2xl border-l-4 border-blue-600 bg-[#0a0202]">
                     <div class="tariff-header bg-blue-950/10">
-                        <h2 class="font-black uppercase text-blue-500 italic text-xs">🛡️ Белый список</h2>
+                        <h2 class="font-black uppercase text-blue-500 italic tracking-widest text-xs">🛡️ White List (Обход)</h2>
+                        <button onclick="saveAllInCategory('white')" class="bg-blue-600 text-white text-[9px] font-black px-6 py-2 rounded-full uppercase hover:bg-blue-500 transition-all">Save White</button>
                     </div>
-                    <div id="list-white"></div>
+                    <div id="list-white" class="min-h-[100px]"></div>
                 </div>
-                <div class="tariff-container shadow-2xl border-l-4 border-yellow-600" id="cat-both">
+
+                <div class="tariff-container shadow-2xl border-l-4 border-yellow-600 bg-[#0a0202]">
                     <div class="tariff-header bg-yellow-950/10">
-                        <h2 class="font-black uppercase text-yellow-500 italic text-xs">👑 Обход + Впн</h2>
+                        <h2 class="font-black uppercase text-yellow-500 italic tracking-widest text-xs">👑 Full / VIP Servers</h2>
+                        <button onclick="saveAllInCategory('both')" class="bg-yellow-600 text-white text-[9px] font-black px-6 py-2 rounded-full uppercase hover:bg-yellow-500 transition-all">Save Full</button>
                     </div>
-                    <div id="list-both"></div>
+                    <div id="list-both" class="min-h-[100px]"></div>
                 </div>
+                
             </div>
         </div>
     </div>
 
     <script>
-        // НАВИГАЦИЯ
+        // ИСПРАВЛЕННАЯ НАВИГАЦИЯ
         const navMap = { 'nav-create': 'tab-create', 'nav-subs': 'tab-subs', 'nav-servers': 'tab-servers' };
         Object.keys(navMap).forEach(id => {
-            document.getElementById(id).onclick = function() {
-                Object.keys(navMap).forEach(k => {
-                    document.getElementById(k).classList.remove('active');
-                    document.getElementById(navMap[k]).classList.remove('active');
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.addEventListener('click', function() {
+                    Object.keys(navMap).forEach(k => {
+                        document.getElementById(k).classList.remove('active');
+                        document.getElementById(navMap[k]).classList.remove('active');
+                    });
+                    this.classList.add('active');
+                    document.getElementById(navMap[id]).classList.add('active');
+                    if(id === 'nav-subs') loadSubscriptions();
+                    if(id === 'nav-servers') loadServers();
                 });
-                this.classList.add('active');
-                document.getElementById(navMap[id]).classList.add('active');
-                if(id === 'nav-subs') loadSubscriptions();
-                if(id === 'nav-servers') loadServers();
             }
         });
 
-        // ПОДПИСКИ С ЛИЧНЫМИ СЕРВЕРАМИ
+        // ПОДПИСКИ (КРАСИВОЕ ОФОРМЛЕНИЕ И РЕДАКТИРОВАНИЕ)
         async function loadSubscriptions() {
-            const res = await fetch('/api/manage_subs?action=list');
-            const data = await res.json();
-            document.getElementById('subs_container').innerHTML = data.map(sub => {
-                const customLinks = (sub.custom_servers || '').split('\n').filter(l => l.includes('vless://'));
-                const customHtml = customLinks.map((link, idx) => `
-                    <div class="flex items-center justify-between bg-black/40 p-2 rounded-lg mt-1 border border-white/5">
-                        <input type="text" value="${decodeURIComponent(link.split('#')[1] || 'Личный')}" 
-                               onchange="renameCustom('${sub.id}', ${idx}, this.value)" 
-                               class="bg-transparent border-none text-[9px] text-zinc-400 font-mono w-full">
-                        <button onclick="deleteCustom('${sub.id}', ${idx})" class="text-red-900 px-2"><i class="fas fa-times"></i></button>
+            const container = document.getElementById('subs_container');
+            container.innerHTML = '<p class="p-10 text-red-900 font-black animate-pulse">ЧТЕНИЕ БАЗЫ ДАННЫХ...</p>';
+            
+            try {
+                const res = await fetch('/api/manage_subs?action=list');
+                const data = await res.json();
+                
+                if (!data || data.length === 0) {
+                    container.innerHTML = '<p class="p-10 text-center text-xs opacity-20">НЕТ КЛИЕНТОВ</p>';
+                    return;
+                }
+
+                container.innerHTML = data.map(sub => {
+                    const badgeClass = `badge-${sub.tariff_type}`;
+                    // Считаем дни до конца
+                    const diff = new Date(sub.expires_at) - new Date();
+                    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+                    const daysColor = days > 5 ? 'text-zinc-500' : 'text-red-500 animate-pulse';
+                    const daysText = days > 0 ? `${days} дней` : "Истекла";
+
+                    return `
+                    <div class="sub-card flex flex-col glass" id="sub-card-${sub.id}">
+                        <div class="flex justify-between items-start mb-4">
+                            <span class="badge ${badgeClass}">${sub.tariff_type}</span>
+                            <div class="flex gap-2">
+                                <button onclick="deleteSub('${sub.id}')" class="text-zinc-800 hover:text-red-600 transition-all text-xs p-1">
+                                    <i class="fas fa-trash-alt"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="space-y-1">
+                                <label class="text-[8px] text-zinc-600 uppercase font-bold tracking-widest ml-1">Имя клиента</label>
+                                <input type="text" id="sub-name-${sub.id}" value="${sub.internal_name || 'Anonymous'}" 
+                                       class="bg-transparent border-none text-white font-black text-xl w-full p-0 focus:text-red-500 outline-none">
+                            </div>
+                            
+                            <div class="space-y-1">
+                                <label class="text-[8px] text-zinc-600 uppercase font-bold tracking-widest ml-1">Действует до (YYYY-MM-DD)</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="date" id="sub-exp-${sub.id}" value="${sub.expires_at}" 
+                                           class="bg-transparent border-none text-zinc-300 font-bold text-xs p-0 outline-none">
+                                    <span class="text-[10px] ${daysColor} font-black uppercase tracking-tighter">[${daysText}]</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-8 flex gap-2">
+                            <button onclick="updateSub('${sub.id}')" class="flex-grow bg-red-600 text-white font-black py-3 rounded-xl text-[9px] uppercase tracking-widest hover:bg-red-500 transition-all shadow-lg shadow-red-900/20">Save Changes</button>
+                            <button onclick="copyToClipboard('${window.location.origin}/api/get_sub?id=${sub.id}')" class="px-4 py-3 bg-white/5 text-zinc-400 rounded-xl hover:bg-red-600 hover:text-white transition-all">
+                                <i class="fas fa-link text-xs"></i>
+                            </button>
+                        </div>
                     </div>
-                `).join('');
-
-                return `
-                <div class="sub-card flex flex-col glass">
-                    <div class="flex justify-between mb-4">
-                        <span class="badge badge-${sub.tariff_type}">${sub.tariff_type}</span>
-                        <button onclick="deleteSub('${sub.id}')" class="text-zinc-800 hover:text-red-600"><i class="fas fa-trash-alt text-xs"></i></button>
-                    </div>
-                    <input type="text" id="sub-name-${sub.id}" value="${sub.internal_name || ''}" class="bg-transparent border-none text-white font-black text-xl mb-4 p-0">
-                    
-                    <div class="p-3 bg-black/40 rounded-2xl border border-white/5">
-                        <label class="text-[8px] text-zinc-600 font-black uppercase tracking-widest">Личные конфиги:</label>
-                        <div id="custom-list-${sub.id}" class="mt-2">${customHtml}</div>
-                        <button onclick="addCustom('${sub.id}')" class="w-full mt-3 border border-dashed border-zinc-800 py-2 rounded-lg text-[9px] font-bold text-zinc-600 hover:text-white transition-all">+ ДОБАВИТЬ VLESS</button>
-                    </div>
-
-                    <div class="mt-6 flex gap-2">
-                        <button onclick="updateSubFull('${sub.id}')" class="flex-grow bg-red-700 py-3 rounded-xl text-[9px] font-black uppercase tracking-widest">Сохранить</button>
-                        <button onclick="copyToClipboard('${window.location.origin}/api/get_sub?id=${sub.id}')" class="px-4 bg-white/5 rounded-xl"><i class="fas fa-link text-zinc-500"></i></button>
-                    </div>
-                </div>`;
-            }).join('');
+                `}).join('');
+            } catch(e) { container.innerHTML = 'Error loading subs'; }
         }
 
-        async function updateSubFull(id) {
-            const data = { internal_name: document.getElementById('sub-name-' + id).value };
-            await fetch('/api/manage_subs', { method: 'POST', body: JSON.stringify({ action: 'update', id, data }) });
-            alert('Данные сохранены');
-            loadSubscriptions();
+        async function updateSub(id) {
+            const name = document.getElementById('sub-name-' + id).value;
+            const exp = document.getElementById('sub-exp-' + id).value;
+            
+            // ВАЖНО: 'data' объект должен соответствовать get_sub.js
+            const res = await fetch('/api/manage_subs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ action: 'update', id, data: { internal_name: name, expires_at: exp } }) 
+            });
+            const result = await res.json();
+            if (result.success) {
+                alert('Данные клиента обновлены!');
+                loadSubscriptions();
+            } else {
+                alert('Ошибка обновления базы.');
+            }
         }
 
-        async function addCustom(id) {
-            const url = prompt('Вставь VLESS ссылку:');
-            if(!url) return;
-            const res = await fetch('/api/manage_subs?action=list');
-            const subs = await res.json();
-            const sub = subs.find(s => s.id === id);
-            const newList = (sub.custom_servers || '') + '\n' + url;
-            await fetch('/api/manage_subs', { method: 'POST', body: JSON.stringify({ action: 'update', id, data: { custom_servers: newList.trim() } }) });
-            loadSubscriptions();
-        }
-
-        async function deleteCustom(id, idx) {
-            const res = await fetch('/api/manage_subs?action=list');
-            const subs = await res.json();
-            const sub = subs.find(s => s.id === id);
-            let list = sub.custom_servers.split('\n').filter(l => l.trim());
-            list.splice(idx, 1);
-            await fetch('/api/manage_subs', { method: 'POST', body: JSON.stringify({ action: 'update', id, data: { custom_servers: list.join('\n') } }) });
-            loadSubscriptions();
-        }
-
-        async function renameCustom(subId, idx, newName) {
-            const res = await fetch('/api/manage_subs?action=list');
-            const subs = await res.json();
-            const sub = subs.find(s => s.id === subId);
-            let list = sub.custom_servers.split('\n').filter(l => l.trim());
-            let parts = list[idx].split('#');
-            list[idx] = parts[0] + '#' + encodeURIComponent(newName);
-            await fetch('/api/manage_subs', { method: 'POST', body: JSON.stringify({ action: 'update', id: subId, data: { custom_servers: list.join('\n') } }) });
-        }
-
-        // СЕРВЕРА С ПОРЯДКОМ
+        // СЕРВЕРА (ОТОБРАЖЕНИЕ КРАСИВЫХ ИМЕН И МАССОВОЕ СОХРАНЕНИЕ)
         async function loadServers() {
             const res = await fetch('/api/manage_servers?action=list');
             const data = await res.json();
+            
             ['base', 'white', 'both'].forEach(type => {
                 const list = document.getElementById('list-' + type);
+                if(!list) return;
                 const filtered = data.filter(s => s.tariff_type === type);
                 list.innerHTML = filtered.map(s => `
-                    <div class="srv-row flex justify-between items-center gap-4">
-                        <div class="flex-grow">
-                            <input type="text" value="${s.name}" onchange="renameSrv('${s.id}', this.value)" class="bg-transparent border-none font-black text-sm text-white w-full p-0">
-                            <div class="text-[8px] text-zinc-600 font-mono truncate w-64">${s.vless_url}</div>
+                    <div class="srv-row" id="row-${s.id}">
+                        <div class="flex justify-between items-center gap-4">
+                            <input type="text" id="srv-name-${s.id}" data-id="${s.id}" value="${s.name}" class="bg-transparent border-none font-black text-sm text-white w-full outline-none focus:text-red-500">
+                            <button onclick="deleteSrv('${s.id}')" class="text-zinc-800 hover:text-red-600 transition-all p-2"><i class="fas fa-trash-alt text-xs"></i></button>
                         </div>
-                        <div class="flex gap-2">
-                            <button onclick="moveSrv('${s.id}', 'up')" class="bg-white/5 p-2 rounded-lg text-zinc-500 hover:text-white"><i class="fas fa-arrow-up"></i></button>
-                            <button onclick="moveSrv('${s.id}', 'down')" class="bg-white/5 p-2 rounded-lg text-zinc-500 hover:text-white"><i class="fas fa-arrow-down"></i></button>
-                            <button onclick="deleteSrv('${s.id}')" class="text-zinc-800 hover:text-red-600 p-2"><i class="fas fa-trash-alt text-xs"></i></button>
-                        </div>
+                        <textarea id="srv-vless-${s.id}" class="bg-[#050000] border border-white/5 text-[9px] font-mono text-zinc-600 w-full p-2 rounded-lg resize-none h-12 focus:text-zinc-300 outline-none">${s.vless_url}</textarea>
                     </div>
-                `).join('') || '<p class="p-10 text-center text-xs opacity-10 uppercase font-black">ПУСТО</p>';
+                `).join('') || '<p class="p-10 text-center text-xs opacity-10">ПУСТО</p>';
             });
         }
 
-        async function moveSrv(id, dir) {
-            // Простое решение: меняем created_at сервера, чтобы он всплыл или утонул при сортировке
-            const res = await fetch('/api/manage_servers?action=list');
-            const servers = await res.json();
-            const idx = servers.findIndex(s => s.id === id);
-            if(dir === 'up' && idx > 0) {
-                const srv = servers[idx];
-                await fetch('/api/manage_servers?action=delete&id=' + srv.id);
-                await fetch('/api/manage_servers', { method: 'POST', body: JSON.stringify({ action: 'add', url: srv.vless_url, name: srv.name, type: srv.tariff_type }) });
+        async function saveAllInCategory(type) {
+            const container = document.getElementById('list-' + type);
+            const nameInputs = container.querySelectorAll('input[data-id]');
+            
+            for (let input of nameInputs) {
+                const id = input.getAttribute('data-id');
+                const name = document.getElementById('srv-name-' + id).value;
+                const vless = document.getElementById('srv-vless-' + id).value;
+                
+                await fetch('/api/manage_servers', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    // Передаем и имя, и vless_url
+                    body: JSON.stringify({ action: 'rename', id, name, vless_url: vless })
+                });
             }
+            alert('База категории ' + type.toUpperCase() + ' обновлена!');
             loadServers();
-        }
-
-        async function createSubscription() {
-            const payload = { title: 'Psychosis VPN', internal: document.getElementById('p_internal').value, tariff: document.getElementById('p_tariff').value, exp: document.getElementById('p_exp').value };
-            const res = await fetch('/api/add_sub', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
-            const data = await res.json();
-            if(data.id) {
-                document.getElementById('result_area').classList.remove('hidden');
-                document.getElementById('final_link').innerText = window.location.origin + '/api/get_sub?id=' + data.id;
-            }
         }
 
         async function addServer() {
             const raw = document.getElementById('srv_vless').value;
             let [url, name] = raw.split('#');
             if(!url) return alert('Ошибка! Вставь VLESS ссылку.');
-            await fetch('/api/manage_servers', { method: 'POST', body: JSON.stringify({ action: 'add', url, name: decodeURIComponent(name || 'New Node'), type: document.getElementById('srv_type').value }) });
+            
+            await fetch('/api/manage_servers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    action: 'add', 
+                    url, 
+                    name: decodeURIComponent(name || 'New Node'), 
+                    type: document.getElementById('srv_type').value 
+                })
+            });
             document.getElementById('srv_vless').value = '';
             loadServers();
         }
 
-        async function renameSrv(id, name) {
-            await fetch('/api/manage_servers', { method: 'POST', body: JSON.stringify({ action: 'rename', id, name }) });
+        async function deleteSrv(id) {
+            if(confirm('Удалить этот сервер из базы?')) {
+                await fetch(`/api/manage_servers?action=delete&id=${id}`);
+                loadServers();
+            }
         }
 
-        async function deleteSrv(id) { if(confirm('Удалить?')) { await fetch('/api/manage_servers?action=delete&id='+id); loadServers(); } }
-        async function deleteSub(id) { if(confirm('Удалить юзера?')) { await fetch('/api/manage_subs?action=delete&id='+id); loadSubscriptions(); } }
-        function copyToClipboard(t) { navigator.clipboard.writeText(t); alert('СКОПИРОВАНО'); }
-        document.getElementById('p_exp').value = new Date(Date.now() + 2592000000).toISOString().split('T')[0];
+        // ВЫПУСК НОВОЙ ПОДПИСКИ
+        async function createSubscription() {
+            const payload = {
+                title: document.getElementById('p_title').value,
+                internal: document.getElementById('p_internal').value,
+                tariff: document.getElementById('p_tariff').value,
+                exp: document.getElementById('p_exp').value
+            };
+            const res = await fetch('/api/add_sub', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify(payload) 
+            });
+            const data = await res.json();
+            if(data.id) {
+                document.getElementById('result_area').classList.remove('hidden');
+                document.getElementById('final_link').innerText = window.location.origin + '/api/get_sub?id=' + data.id;
+                // Скроллим к результату
+                document.getElementById('result_area').scrollIntoView({ behavior: 'smooth' });
+            } else {
+                alert('Ошибка создания подписки в базе Supabase.');
+            }
+        }
+
+        async function deleteSub(id) {
+            if(confirm('Удалить клиента и его ключ навсегда?')) {
+                await fetch(`/api/manage_subs?action=delete&id=${id}`);
+                loadSubscriptions();
+            }
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text);
+            alert('СКОПИРОВАНО В БУФЕР');
+        }
+
+        // Авто-дата (по умолчанию на 30 дней вперед)
+        const d = new Date(); d.setDate(d.getDate() + 30);
+        document.getElementById('p_exp').value = d.toISOString().split('T')[0];
     </script>
 </body>
 </html>
