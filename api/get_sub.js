@@ -71,7 +71,7 @@ export default async function handler(req, res) {
   ].join('\n');
   
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  // Чтобы title менялся в приложении, имя файла тоже должно быть Psychosis VPN
-  res.setHeader('Content-Disposition', `attachment; filename="Psychosis VPN"`);
+  res.setHeader('Content-Disposition', `inline; filename="${profileTitle}.txt"`);
+  res.setHeader('X-Profile-Name', profileTitle);
   res.send(Buffer.from(config).toString('base64'));
 }
