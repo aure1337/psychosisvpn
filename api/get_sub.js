@@ -28,6 +28,12 @@ export default async function handler(req, res) {
       const subUrl = `https://${req.headers.host}/api/get_sub?id=${id}`;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.send(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="UTF-8">
+              <title>PSYCHOSIS VPN</title>
+          </head>
           <body style="background:#050000;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
               <div style="max-width:400px;width:90%;padding:40px;border:1px solid #200;border-radius:30px;background:#0a0202;text-align:center;box-shadow:0 0 50px rgba(255,0,0,0.2);">
                   <h1 style="color:#f00;margin-bottom:10px;font-style:italic;">Psychosis VPN</h1>
@@ -42,6 +48,7 @@ export default async function handler(req, res) {
                   </div>
               </div>
           </body>
+          </html>
       `);
   }
 
@@ -55,7 +62,7 @@ export default async function handler(req, res) {
   let links = sub.custom_servers ? sub.custom_servers + '\n' + serverLinks : serverLinks;
   
   const totalBytes = (sub.total_gb || 0) * 1024 * 1024 * 1024;
-  const announce = sub.custom_announce || `@psychosisvpnm | Тариф: ${currentTariff} | До: ${dateFormatted}`;
+  const announce = sub.custom_announce || `@psychosisvpn | Тариф: ${currentTariff} | До: ${dateFormatted}`;
   
   // 🔧 ИСПРАВЛЕНИЕ: Динамический profile-title со статусом и тарифом
   const profileTitle = `Psychosis VPN - ${currentTariff} (${days > 0 ? days : 0}д)`;
