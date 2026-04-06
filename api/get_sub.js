@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     year: 'numeric'
   });
 
-  const tMap = { 'both': 'Обход+Впн', 'white': 'Обход', 'base': 'Базовый Впн' };
+  const tMap = { 'both': 'Обход и Впн', 'white': 'Обход', 'base': 'Базовый Впн' };
   const currentTariff = tMap[sub.tariff_type] || sub.tariff_type;
   
   const userAgent = req.headers['user-agent'] || '';
