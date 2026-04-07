@@ -4,7 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
-const ADMINS = [1192691079, 6443614614, 7761584076];
+const ADMINS = [1192691079, 7761584076];
 
 // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
@@ -77,7 +77,7 @@ bot.hears('👤 Профиль', async (ctx) => {
     }
 });
 
-// --- АДМИН-ПАНЕЛЬ (ВНУТРИ БОТА) ---
+// --- АДМИН-ПАНЕЛЬ (УПРАВЛЕНИЕ) ---
 
 bot.hears('🛠 Админ-панель', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
@@ -85,33 +85,96 @@ bot.hears('🛠 Админ-панель', async (ctx) => {
     const adminKeyboard = Markup.inlineKeyboard([
         [Markup.button.callback('📊 Статистика', 'admin_stats')],
         [Markup.button.callback('🖥 Список серверов', 'admin_servers')],
-        [Markup.button.url('🌐 Открыть Web-админку', 'https://psychosisvpn.vercel.app/admin-Jao38jOej2Pd.html')]
+        [Markup.button.callback('➕ Добавить сервер', 'admin_add_start')]
     ]);
 
     ctx.replyWithHTML('<b>🛠 Панель управления Psychosis VPN</b>\nВыберите действие:', adminKeyboard);
 });
 
-// Обработка инлайновых кнопок админки
+// 1. Статистика
 bot.action('admin_stats', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
     const { count } = await supabase.from('vpn_subs').select('*', { count: 'exact', head: true });
     await ctx.answerCbQuery();
-    await ctx.replyWithHTML(`<b>📊 Статистика:</b>\n\nВсего пользователей в базе: <code>${count}</code>`);
+    await ctx.replyWithHTML(`<b>📊 Всего пользователей:</b> <code>${count}</code>`);
 });
 
+// 2. Список серверов с кнопками управления
 bot.action('admin_servers', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
-    const { data: servers, error } = await supabase.from('vpn_servers').select('*').order('sort_index', { ascending: true });
+    const { data: servers } = await supabase.from('vpn_servers').select('*').order('sort_index', { ascending: true });
     
     await ctx.answerCbQuery();
-    if (error || !servers) return ctx.reply('Ошибка загрузки серверов.');
+    if (!servers || servers.length === 0) return ctx.reply('Серверов пока нет.');
 
-    let list = '<b>🖥 Список активных серверов:</b>\n\n';
-    servers.forEach(srv => {
-        list += `${srv.tariff_type === 'base' ? '🔴' : '⚪️'} <b>${srv.name}</b> (Индекс: ${srv.sort_index || 0})\n`;
-    });
+    for (const srv of servers) {
+        const keyboard = Markup.inlineKeyboard([
+            [
+                Markup.button.callback('📝 Имя', `edit_name_${srv.id}`),
+                Markup.button.callback('🗑 Удалить', `confirm_del_${srv.id}`)
+            ]
+        ]);
+        
+        await ctx.replyWithHTML(
+            `${srv.tariff_type === 'base' ? '🔴' : '⚪️'} <b>${srv.name}</b>\n<code>${srv.vless_url.substring(0, 40)}...</code>`,
+            keyboard
+        );
+    }
+});
 
-    ctx.replyWithHTML(list);
+// 3. Удаление сервера
+bot.action(/^confirm_del_(.+)$/, async (ctx) => {
+    if (!ADMINS.includes(ctx.from.id)) return;
+    const srvId = ctx.match[1];
+    
+    const { error } = await supabase.from('vpn_servers').delete().eq('id', srvId);
+    
+    await ctx.answerCbQuery('Удалено!');
+    if (error) return ctx.reply('Ошибка при удалении.');
+    ctx.editMessageText('✅ Сервер успешно удален.');
+});
+
+// 4. Логика добавления и переименования (через текстовые команды)
+bot.action('admin_add_start', async (ctx) => {
+    await ctx.answerCbQuery();
+    ctx.replyWithHTML('Чтобы добавить сервер, используй команду:\n<code>/add_srv ИМЯ | ТИП | ССЫЛКА</code>\n\nПример:\n<code>/add_srv Германия | base | vless://...</code>');
+});
+
+bot.command('add_srv', async (ctx) => {
+    if (!ADMINS.includes(ctx.from.id)) return;
+    const parts = ctx.message.text.split('/add_srv ')[1]?.split('|').map(p => p.trim());
+    
+    if (!parts || parts.length < 3) return ctx.reply('❌ Неверный формат. Используй: Имя | Тип | Ссылка');
+
+    const { error } = await supabase.from('vpn_servers').insert([{
+        name: parts[0],
+        tariff_type: parts[1],
+        vless_url: parts[2],
+        sort_index: 0
+    }]);
+
+    if (error) return ctx.reply('Ошибка базы: ' + error.message);
+    ctx.reply('✅ Сервер "' + parts[0] + '" добавлен!');
+});
+
+bot.action(/^edit_name_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const srvId = ctx.match[1];
+    ctx.replyWithHTML(`Чтобы изменить имя этого сервера, введи:\n<code>/rename ${srvId} Новое Имя</code>`);
+});
+
+bot.command('rename', async (ctx) => {
+    if (!ADMINS.includes(ctx.from.id)) return;
+    const args = ctx.message.text.split('/rename ')[1]?.split(' ');
+    const id = args?.shift();
+    const newName = args?.join(' ');
+
+    if (!id || !newName) return ctx.reply('❌ Формат: /rename ID Новое_Имя');
+
+    const { error } = await supabase.from('vpn_servers').update({ name: newName }).eq('id', id);
+    
+    if (error) return ctx.reply('Ошибка: ' + error.message);
+    ctx.reply('✅ Имя изменено на: ' + newName);
 });
 
 bot.hears('💎 Покупка', (ctx) => ctx.replyWithHTML('Свяжитесь с нами: <a href="https://t.me/psychosisvpn">Админ</a>'));
