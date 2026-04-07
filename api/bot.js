@@ -22,7 +22,7 @@ bot.command('test', async (ctx) => {
             return ctx.reply('Вы уже брали тестовый период! ✋');
         }
 
-        // 2. Считаем дату окончания (+5 дней)
+        //// 2. Считаем дату окончания (+5 дней)
         const expDate = new Date();
         expDate.setDate(expDate.getDate() + 5);
 
