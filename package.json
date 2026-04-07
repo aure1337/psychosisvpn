@@ -1,6 +1,7 @@
 {
   "name": "psychosis-vpn-panel",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "main": "api/bot.js",
   "dependencies": {
     "telegraf": "^4.12.2",
     "@supabase/supabase-js": "^2.39.0"
