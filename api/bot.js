@@ -6,11 +6,10 @@ const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
 const ADMINS = [1192691079, 6443614614, 7761584076];
 
-// Функция для генерации меню (динамическая кнопка Теста)
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
 async function getMainMenu(ctx) {
     const username = ctx.from.username || ctx.from.first_name;
-    
-    // Проверяем, есть ли уже тест в базе
     const { data: testExists } = await supabase
         .from('vpn_subs')
         .select('id')
@@ -18,144 +17,104 @@ async function getMainMenu(ctx) {
         .maybeSingle();
 
     const buttons = [['👤 Профиль', '💎 Покупка']];
-    
-    // Если теста нет — добавляем кнопку
-    if (!testExists) {
-        buttons.push(['🎁 Тест Период']);
-    }
-
-    // Если админ — добавляем кнопку управления
-    if (ADMINS.includes(ctx.from.id)) {
-        buttons.push(['🛠 Админ-панель']);
-    }
+    if (!testExists) buttons.push(['🎁 Тест Период']);
+    if (ADMINS.includes(ctx.from.id)) buttons.push(['🛠 Админ-панель']);
 
     return Markup.keyboard(buttons).resize();
 }
 
-// Старт
+// --- ОБРАБОТЧИКИ КОМАНД ---
+
 bot.start(async (ctx) => {
     const menu = await getMainMenu(ctx);
-    return ctx.replyWithHTML(
-        `<b>Добро пожаловать в Psychosis VPN!</b>\n\n` +
-        `Используй меню ниже для управления доступом.`,
-        menu
-    );
+    return ctx.replyWithHTML(`<b>Добро пожаловать в Psychosis VPN!</b>`, menu);
 });
 
 // Кнопка ТЕСТ ПЕРИОД
 bot.hears('🎁 Тест Период', async (ctx) => {
     const username = ctx.from.username || ctx.from.first_name;
     const internalName = `Тест @${username}`;
-
     try {
-        const { data: existing } = await supabase
-            .from('vpn_subs')
-            .select('*')
-            .eq('internal_name', internalName)
-            .maybeSingle();
-
-        if (existing) {
-            const menu = await getMainMenu(ctx);
-            return ctx.reply('Вы уже использовали свой тестовый период! ✋', menu);
-        }
+        const { data: existing } = await supabase.from('vpn_subs').select('*').eq('internal_name', internalName).maybeSingle();
+        if (existing) return ctx.reply('Вы уже использовали тест!', await getMainMenu(ctx));
 
         const expDate = new Date();
         expDate.setDate(expDate.getDate() + 5);
-        const dateString = expDate.toISOString().split('T')[0];
-
-        const { data, error } = await supabase
-            .from('vpn_subs')
-            .insert([{
-                internal_name: internalName,
-                tariff_type: 'both',
-                expires_at: dateString,
-                profile_title: 'Psychosis VPN | TEST',
-                total_gb: 0
-            }])
-            .select().single();
+        
+        const { data, error } = await supabase.from('vpn_subs').insert([{
+            internal_name: internalName,
+            tariff_type: 'both',
+            expires_at: expDate.toISOString().split('T')[0],
+            profile_title: 'Psychosis VPN | TEST',
+            total_gb: 0
+        }]).select().single();
 
         if (error) throw error;
-
-        const menu = await getMainMenu(ctx); // Кнопка исчезнет после обновления меню
-        await ctx.replyWithHTML(
-            `<b>✅ Тест активирован!</b>\n` +
-            `Теперь кнопка теста скрыта в твоем меню.`,
-            menu
-        );
-
-    } catch (e) {
-        ctx.reply('Ошибка. Попробуйте позже.');
-    }
+        await ctx.replyWithHTML(`<b>✅ Тест активирован!</b>`, await getMainMenu(ctx));
+    } catch (e) { ctx.reply('Ошибка сервера.'); }
 });
 
-// Кнопка ПРОФИЛЬ (с твоим дизайном)
+// Кнопка ПРОФИЛЬ
 bot.hears('👤 Профиль', async (ctx) => {
     const username = ctx.from.username || ctx.from.first_name;
-    const userId = ctx.from.id;
-
     let subs = [];
     
-    // Если это админ — выдаем спец. подписку
-    if (ADMINS.includes(userId)) {
-        const { data: adminSub } = await supabase
-            .from('vpn_subs')
-            .select('*')
-            .eq('internal_name', 'test')
-            .maybeSingle();
+    if (ADMINS.includes(ctx.from.id)) {
+        const { data: adminSub } = await supabase.from('vpn_subs').select('*').eq('internal_name', 'test').maybeSingle();
         if (adminSub) subs.push(adminSub);
     } else {
-        // Обычный поиск по имени
-        const { data } = await supabase
-            .from('vpn_subs')
-            .select('*')
-            .ilike('internal_name', `%${username}%`);
+        const { data } = await supabase.from('vpn_subs').select('*').ilike('internal_name', `%${username}%`);
         if (data) subs = data;
     }
 
-    if (subs.length === 0) {
-        return ctx.replyWithHTML('<b>У вас пока нет подписок.</b>', await getMainMenu(ctx));
-    }
+    if (subs.length === 0) return ctx.reply('Подписок не найдено.');
 
     for (const s of subs) {
         const dateObj = new Date(s.expires_at);
-        const formattedDate = dateObj.toLocaleDateString('ru-RU');
-        
-        // Считаем остаток дней
-        const diffTime = dateObj - new Date();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        const daysLeft = diffDays > 0 ? `${diffDays} дней` : 'Истекла';
-
-        const report = 
-            `👤 Ваш профиль: <b>@${username}</b>\n\n` +
-            `🎫 <b>${s.profile_title}</b>\n` +
-            `🕗 До: <code>${formattedDate}</code> | <b>${daysLeft}</b>\n` +
-            `🎮 Тариф: <code>${s.tariff_type.toUpperCase()}</code>\n\n` +
-            `🌊 Ваша подписка:\n` +
-            `🔗 <code>https://psychosisvpn.vercel.app/api/get_sub?id=${s.id}</code>`;
-
-        await ctx.replyWithHTML(report, await getMainMenu(ctx));
+        const diffDays = Math.ceil((dateObj - new Date()) / (1000 * 60 * 60 * 24));
+        const report = `👤 Профиль: <b>@${username}</b>\n\n🎫 <b>${s.profile_title}</b>\n🕗 До: <code>${dateObj.toLocaleDateString('ru-RU')}</code> | <b>${diffDays > 0 ? diffDays : 0} дн.</b>\n🎮 Тариф: <code>${s.tariff_type.toUpperCase()}</code>\n\n🔗 <code>https://psychosisvpn.vercel.app/api/get_sub?id=${s.id}</code>`;
+        await ctx.replyWithHTML(report);
     }
 });
 
-// АДМИН-ПАНЕЛЬ (только для ID из списка)
+// --- АДМИН-ПАНЕЛЬ (ВНУТРИ БОТА) ---
+
 bot.hears('🛠 Админ-панель', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
     
-    ctx.replyWithHTML(
-        `<b>🛠 Панель администратора</b>\n\n` +
-        `Здесь ты можешь управлять серверами и подписками через веб-интерфейс:\n` +
-        `🔗 <a href="https://psychosisvpn.vercel.app/admin-Jao38jOej2Pd.html">Открыть Админку</a>`
-    );
+    const adminKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('📊 Статистика', 'admin_stats')],
+        [Markup.button.callback('🖥 Список серверов', 'admin_servers')],
+        [Markup.button.url('🌐 Открыть Web-админку', 'https://psychosisvpn.vercel.app/admin-Jao38jOej2Pd.html')]
+    ]);
+
+    ctx.replyWithHTML('<b>🛠 Панель управления Psychosis VPN</b>\nВыберите действие:', adminKeyboard);
 });
 
-bot.hears('💎 Покупка', async (ctx) => {
-    ctx.replyWithHTML(
-        '<b>💎 Оформление подписки</b>\n\n' +
-        'Свяжитесь с нами для покупки:\n' +
-        '👉 <a href="https://t.me/psychosisvpn">Менеджер Psychosis</a>',
-        await getMainMenu(ctx)
-    );
+// Обработка инлайновых кнопок админки
+bot.action('admin_stats', async (ctx) => {
+    if (!ADMINS.includes(ctx.from.id)) return;
+    const { count } = await supabase.from('vpn_subs').select('*', { count: 'exact', head: true });
+    await ctx.answerCbQuery();
+    await ctx.replyWithHTML(`<b>📊 Статистика:</b>\n\nВсего пользователей в базе: <code>${count}</code>`);
 });
+
+bot.action('admin_servers', async (ctx) => {
+    if (!ADMINS.includes(ctx.from.id)) return;
+    const { data: servers, error } = await supabase.from('vpn_servers').select('*').order('sort_index', { ascending: true });
+    
+    await ctx.answerCbQuery();
+    if (error || !servers) return ctx.reply('Ошибка загрузки серверов.');
+
+    let list = '<b>🖥 Список активных серверов:</b>\n\n';
+    servers.forEach(srv => {
+        list += `${srv.tariff_type === 'base' ? '🔴' : '⚪️'} <b>${srv.name}</b> (Индекс: ${srv.sort_index || 0})\n`;
+    });
+
+    ctx.replyWithHTML(list);
+});
+
+bot.hears('💎 Покупка', (ctx) => ctx.replyWithHTML('Свяжитесь с нами: <a href="https://t.me/psychosisvpn">Админ</a>'));
 
 module.exports = async (req, res) => {
     try {
