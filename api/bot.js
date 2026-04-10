@@ -4,7 +4,7 @@ const { createClient } = require('@supabase/supabase-js');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
-const ADMINS = [1192691079, 7761584076, 6443614614];
+const ADMINS = [1192691079, 7761584076];
 const userStates = {}; 
 
 function addDaysToDate(baseDateStr, days) {
