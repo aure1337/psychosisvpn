@@ -4,184 +4,131 @@ const { createClient } = require('@supabase/supabase-js');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
-const ADMINS = [1192691079, 7761584076];
+const ADMINS = [1192691079, 6443614614, 7761584076];
 
-// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-
+// --- МЕНЮ ---
 async function getMainMenu(ctx) {
     const username = ctx.from.username || ctx.from.first_name;
-    const { data: testExists } = await supabase
-        .from('vpn_subs')
-        .select('id')
-        .eq('internal_name', `Тест @${username}`)
-        .maybeSingle();
+    const { data: testExists } = await supabase.from('vpn_subs').select('id').eq('internal_name', `Тест @${username}`).maybeSingle();
 
-    const buttons = [['👤 Профиль', '💎 Покупка']];
+    const buttons = [['👤 Профиль', '💎 Покупка'], ['🎟 Промокод']];
     if (!testExists) buttons.push(['🎁 Тест Период']);
     if (ADMINS.includes(ctx.from.id)) buttons.push(['🛠 Админ-панель']);
 
     return Markup.keyboard(buttons).resize();
 }
 
-// --- ОБРАБОТЧИКИ КОМАНД ---
-
-bot.start(async (ctx) => {
-    const menu = await getMainMenu(ctx);
-    return ctx.replyWithHTML(`<b>Добро пожаловать в Psychosis VPN!</b>`, menu);
+// --- ЛОГИКА ПРОМОКОДОВ ДЛЯ ЮЗЕРОВ ---
+bot.hears('🎟 Промокод', (ctx) => {
+    ctx.replyWithHTML('<b>🎟 Активация промокода</b>\n\nВведите ваш промокод в чат:');
 });
 
-// Кнопка ТЕСТ ПЕРИОД
-bot.hears('🎁 Тест Период', async (ctx) => {
+// Слушаем ввод текста (если это не команда и не кнопка, значит это может быть промокод)
+bot.on('text', async (ctx, next) => {
+    if (ctx.message.text.startsWith('/') || ['👤 Профиль', '💎 Покупка', '🎟 Промокод', '🎁 Тест Период', '🛠 Админ-панель'].includes(ctx.message.text)) {
+        return next();
+    }
+
+    const inputCode = ctx.message.text.trim();
     const username = ctx.from.username || ctx.from.first_name;
-    const internalName = `Тест @${username}`;
+
     try {
-        const { data: existing } = await supabase.from('vpn_subs').select('*').eq('internal_name', internalName).maybeSingle();
-        if (existing) return ctx.reply('Вы уже использовали тест!', await getMainMenu(ctx));
+        // 1. Ищем промокод
+        const { data: promo } = await supabase.from('promocodes').select('*').eq('code', inputCode).maybeSingle();
 
-        const expDate = new Date();
-        expDate.setDate(expDate.getDate() + 5);
-        
-        const { data, error } = await supabase.from('vpn_subs').insert([{
-            internal_name: internalName,
-            tariff_type: 'both',
-            expires_at: expDate.toISOString().split('T')[0],
-            profile_title: 'Psychosis VPN | TEST',
-            total_gb: 0
-        }]).select().single();
+        if (!promo) return ctx.reply('❌ Промокод не найден или истек.');
+        if (promo.used_count >= promo.max_uses) return ctx.reply('❌ Этот промокод уже закончился.');
 
-        if (error) throw error;
-        await ctx.replyWithHTML(`<b>✅ Тест активирован!</b>`, await getMainMenu(ctx));
-    } catch (e) { ctx.reply('Ошибка сервера.'); }
+        // 2. Ищем подписку юзера
+        let { data: sub } = await supabase.from('vpn_subs').select('*').ilike('internal_name', `%${username}%`).maybeSingle();
+
+        let newExpDate = new Date();
+
+        if (sub) {
+            let currentExp = new Date(sub.expires_at);
+            // Если подписка еще жива и разрешено складывать
+            if (currentExp > new Date() && promo.add_to_existing) {
+                newExpDate = currentExp;
+            }
+            newExpDate.setDate(newExpDate.getDate() + promo.days);
+
+            await supabase.from('vpn_subs').update({
+                expires_at: newExpDate.toISOString().split('T')[0],
+                tariff_type: promo.tariff_type 
+            }).eq('id', sub.id);
+        } else {
+            // Если подписки нет — создаем новую
+            newExpDate.setDate(newExpDate.getDate() + promo.days);
+            await supabase.from('vpn_subs').insert([{
+                internal_name: `User @${username}`,
+                tariff_type: promo.tariff_type,
+                expires_at: newExpDate.toISOString().split('T')[0],
+                profile_title: 'Psychosis VPN | Premium'
+            }]);
+        }
+
+        // 3. Обновляем счетчик промокода
+        await supabase.from('promocodes').update({ used_count: promo.used_count + 1 }).eq('id', promo.id);
+
+        ctx.replyWithHTML(`<b>✅ Успех!</b>\nПромокод активирован. Добавлено <b>${promo.days} дней</b> тарифа <b>${promo.tariff_type.toUpperCase()}</b>.`);
+    } catch (e) { ctx.reply('Ошибка активации.'); }
 });
 
-// Кнопка ПРОФИЛЬ
-bot.hears('👤 Профиль', async (ctx) => {
-    const username = ctx.from.username || ctx.from.first_name;
-    let subs = [];
-    
-    if (ADMINS.includes(ctx.from.id)) {
-        const { data: adminSub } = await supabase.from('vpn_subs').select('*').eq('internal_name', 'test').maybeSingle();
-        if (adminSub) subs.push(adminSub);
-    } else {
-        const { data } = await supabase.from('vpn_subs').select('*').ilike('internal_name', `%${username}%`);
-        if (data) subs = data;
-    }
-
-    if (subs.length === 0) return ctx.reply('Подписок не найдено.');
-
-    for (const s of subs) {
-        const dateObj = new Date(s.expires_at);
-        const diffDays = Math.ceil((dateObj - new Date()) / (1000 * 60 * 60 * 24));
-        const report = `👤 Профиль: <b>@${username}</b>\n\n🎫 <b>${s.profile_title}</b>\n🕗 До: <code>${dateObj.toLocaleDateString('ru-RU')}</code> | <b>${diffDays > 0 ? diffDays : 0} дн.</b>\n🎮 Тариф: <code>${s.tariff_type.toUpperCase()}</code>\n\n🔗 <code>https://psychosisvpn.vercel.app/api/get_sub?id=${s.id}</code>`;
-        await ctx.replyWithHTML(report);
-    }
-});
-
-// --- АДМИН-ПАНЕЛЬ (УПРАВЛЕНИЕ) ---
-
-bot.hears('🛠 Админ-панель', async (ctx) => {
-    if (!ADMINS.includes(ctx.from.id)) return;
-    
-    const adminKeyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('📊 Статистика', 'admin_stats')],
-        [Markup.button.callback('🖥 Список серверов', 'admin_servers')],
-        [Markup.button.callback('➕ Добавить сервер', 'admin_add_start')]
-    ]);
-
-    ctx.replyWithHTML('<b>🛠 Панель управления Psychosis VPN</b>\nВыберите действие:', adminKeyboard);
-});
-
-// 1. Статистика
-bot.action('admin_stats', async (ctx) => {
-    if (!ADMINS.includes(ctx.from.id)) return;
-    const { count } = await supabase.from('vpn_subs').select('*', { count: 'exact', head: true });
+// --- АДМИНКА ПРОМОКОДОВ ---
+bot.action('admin_promo_list', async (ctx) => {
+    const { data: promos } = await supabase.from('promocodes').select('*');
     await ctx.answerCbQuery();
-    await ctx.replyWithHTML(`<b>📊 Всего пользователей:</b> <code>${count}</code>`);
-});
+    if (!promos?.length) return ctx.reply('Промокодов нет.');
 
-// 2. Список серверов с кнопками управления
-bot.action('admin_servers', async (ctx) => {
-    if (!ADMINS.includes(ctx.from.id)) return;
-    const { data: servers } = await supabase.from('vpn_servers').select('*').order('sort_index', { ascending: true });
-    
-    await ctx.answerCbQuery();
-    if (!servers || servers.length === 0) return ctx.reply('Серверов пока нет.');
-
-    for (const srv of servers) {
-        const keyboard = Markup.inlineKeyboard([
-            [
-                Markup.button.callback('📝 Имя', `edit_name_${srv.id}`),
-                Markup.button.callback('🗑 Удалить', `confirm_del_${srv.id}`)
-            ]
-        ]);
-        
-        await ctx.replyWithHTML(
-            `${srv.tariff_type === 'base' ? '🔴' : '⚪️'} <b>${srv.name}</b>\n<code>${srv.vless_url.substring(0, 40)}...</code>`,
-            keyboard
-        );
+    for (const p of promos) {
+        const text = `🎟 <code>${p.code}</code> (${p.tariff_type})\n➕ Дней: ${p.days} | Использовано: ${p.used_count}/${p.max_uses}`;
+        const kb = Markup.inlineKeyboard([Markup.button.callback('🗑 Удалить', `del_promo_${p.id}`)]);
+        await ctx.replyWithHTML(text, kb);
     }
 });
 
-// 3. Удаление сервера
-bot.action(/^confirm_del_(.+)$/, async (ctx) => {
-    if (!ADMINS.includes(ctx.from.id)) return;
-    const srvId = ctx.match[1];
-    
-    const { error } = await supabase.from('vpn_servers').delete().eq('id', srvId);
-    
-    await ctx.answerCbQuery('Удалено!');
-    if (error) return ctx.reply('Ошибка при удалении.');
-    ctx.editMessageText('✅ Сервер успешно удален.');
-});
-
-// 4. Логика добавления и переименования (через текстовые команды)
-bot.action('admin_add_start', async (ctx) => {
+bot.action('admin_promo_create', async (ctx) => {
     await ctx.answerCbQuery();
-    ctx.replyWithHTML('Чтобы добавить сервер, используй команду:\n<code>/add_srv ИМЯ | ТИП | ССЫЛКА</code>\n\nПример:\n<code>/add_srv Германия | base | vless://...</code>');
+    ctx.replyWithHTML('<b>Создание промокода</b>\nИспользуй команду:\n<code>/add_promo КОД | ТАРИФ | ДНИ | КОЛ-ВО | СУММИРОВАТЬ(true/false)</code>\n\nПример:\n<code>/add_promo FREE5 | both | 5 | 100 | true</code>');
 });
 
-bot.command('add_srv', async (ctx) => {
+bot.command('add_promo', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
-    const parts = ctx.message.text.split('/add_srv ')[1]?.split('|').map(p => p.trim());
-    
-    if (!parts || parts.length < 3) return ctx.reply('❌ Неверный формат. Используй: Имя | Тип | Ссылка');
+    const parts = ctx.message.text.split('/add_promo ')[1]?.split('|').map(p => p.trim());
+    if (parts.length < 5) return ctx.reply('Ошибка формата!');
 
-    const { error } = await supabase.from('vpn_servers').insert([{
-        name: parts[0],
+    const { error } = await supabase.from('promocodes').insert([{
+        code: parts[0],
         tariff_type: parts[1],
-        vless_url: parts[2],
-        sort_index: 0
+        days: parseInt(parts[2]),
+        max_uses: parseInt(parts[3]),
+        add_to_existing: parts[4] === 'true'
     }]);
 
-    if (error) return ctx.reply('Ошибка базы: ' + error.message);
-    ctx.reply('✅ Сервер "' + parts[0] + '" добавлен!');
-});
-
-bot.action(/^edit_name_(.+)$/, async (ctx) => {
-    await ctx.answerCbQuery();
-    const srvId = ctx.match[1];
-    ctx.replyWithHTML(`Чтобы изменить имя этого сервера, введи:\n<code>/rename ${srvId} Новое Имя</code>`);
-});
-
-bot.command('rename', async (ctx) => {
-    if (!ADMINS.includes(ctx.from.id)) return;
-    const args = ctx.message.text.split('/rename ')[1]?.split(' ');
-    const id = args?.shift();
-    const newName = args?.join(' ');
-
-    if (!id || !newName) return ctx.reply('❌ Формат: /rename ID Новое_Имя');
-
-    const { error } = await supabase.from('vpn_servers').update({ name: newName }).eq('id', id);
-    
     if (error) return ctx.reply('Ошибка: ' + error.message);
-    ctx.reply('✅ Имя изменено на: ' + newName);
+    ctx.reply(`✅ Промокод ${parts[0]} создан!`);
 });
 
-bot.hears('💎 Покупка', (ctx) => ctx.replyWithHTML('Свяжитесь с нами: <a href="https://t.me/psychosisvpn">Админ</a>'));
+bot.action(/^del_promo_(.+)$/, async (ctx) => {
+    await supabase.from('promocodes').delete().eq('id', ctx.match[1]);
+    await ctx.answerCbQuery('Удалено');
+    ctx.deleteMessage();
+});
+
+// Добавь кнопки в основной обработчик админ-панели
+bot.hears('🛠 Админ-панель', async (ctx) => {
+    if (!ADMINS.includes(ctx.from.id)) return;
+    const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('🎟 Список промо', 'admin_promo_list'), Markup.button.callback('➕ Создать промо', 'admin_promo_create')],
+        [Markup.button.callback('📊 Статистика', 'admin_stats'), Markup.button.callback('🖥 Сервера', 'admin_servers')]
+    ]);
+    ctx.replyWithHTML('<b>Админка</b>', kb);
+});
+
+// Заглушка старта и остального кода (как в прошлых ответах)
+bot.start(async (ctx) => ctx.reply('Привет Psychosis Vpn', await getMainMenu(ctx)));
 
 module.exports = async (req, res) => {
-    try {
-        if (req.method === 'POST') await bot.handleUpdate(req.body);
-        res.status(200).send('OK');
-    } catch (e) { res.status(500).send('Error'); }
+    try { if (req.method === 'POST') await bot.handleUpdate(req.body); res.status(200).send('OK'); }
+    catch (e) { res.status(500).send('Error'); }
 };
