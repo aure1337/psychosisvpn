@@ -46,15 +46,17 @@ bot.hears('🎁 Тест Период', async (ctx) => {
         tg_chat_id: ctx.from.id.toString()
     }]);
 
-    ctx.replyWithHTML(
-        `@${username}, тестовый период активирован.\n` +
-        `Окончание: <b>${expDate.toLocaleDateString('ru-RU')}</b>\n` +
-        `Тариф: <b>BOTH</b>`, 
+    const formattedDate = `${String(expDate.getMonth() + 1).padStart(2, '0')}.${String(expDate.getDate()).padStart(2, '0')}.${expDate.getFullYear()}`;
+
+    ctx.replyWithMarkdownV2(
+        `@${username}, тестовый период активирован\\.\n` +
+        `Окончание: **${formattedDate}**\n` +
+        `Тариф: **BOTH**`, 
         await getMainMenu(ctx)
     );
 });
 
-// --- ОБРАБОТКА ТЕКСТА (СОСТОЯНИЯ) ---
+// --- ОБРАБОТКА СОСТОЯНИЙ (ВВОД ТЕКСТА) ---
 bot.on('text', async (ctx, next) => {
     const userId = ctx.from.id;
     const state = userStates[userId];
@@ -70,7 +72,7 @@ bot.on('text', async (ctx, next) => {
         } 
         else if (state.action === 'msg_single') {
             const { data: t } = await supabase.from('vpn_subs').select('tg_chat_id').eq('id', state.targetId).single();
-            if (t?.tg_chat_id) await bot.telegram.sendMessage(t.tg_chat_id, `🔔 <b>Сообщение:</b>\n\n${input}`, { parse_mode: 'HTML' });
+            if (t?.tg_chat_id) await bot.telegram.sendMessage(t.tg_chat_id, `🔔 **Сообщение:**\n\n${input}`, { parse_mode: 'MarkdownV2' });
             ctx.reply('✅ Отправлено.');
         }
         else if (state.action === 'add_days_manual') {
@@ -78,6 +80,10 @@ bot.on('text', async (ctx, next) => {
             const newDate = addDaysToDate(s.expires_at, input);
             await supabase.from('vpn_subs').update({ expires_at: newDate }).eq('id', state.targetId);
             ctx.reply(`✅ Добавлено ${input} дн.`);
+        }
+        else if (state.action === 'set_date_manual') {
+            await supabase.from('vpn_subs').update({ expires_at: input }).eq('id', state.targetId);
+            ctx.reply(`✅ Новая дата установлена: ${input}`);
         }
         else if (state.action === 'srv_add_step1') {
             userStates[userId] = { action: 'srv_add_step2', vless: input };
@@ -98,6 +104,7 @@ bot.on('text', async (ctx, next) => {
         delete userStates[userId]; return;
     }
 
+    // Промокоды через обычный ввод
     const serviceButtons = ['👤 Профиль', '💎 Покупка', '🎟 Промокод', '🎁 Тест Период', '🛠 Админ-панель'];
     if (ctx.message.text.startsWith('/') || serviceButtons.includes(ctx.message.text)) return next();
 
@@ -115,7 +122,7 @@ bot.on('text', async (ctx, next) => {
     }
 });
 
-// --- АДМИНКА ---
+// --- АДМИН ПАНЕЛЬ ---
 bot.hears('🛠 Админ-панель', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
     const kb = Markup.inlineKeyboard([
@@ -123,7 +130,7 @@ bot.hears('🛠 Админ-панель', async (ctx) => {
         [Markup.button.callback('🎟 Промокоды', 'admin_promo_list'), Markup.button.callback('📢 Рассылка', 'global_msg')],
         [Markup.button.callback('🎁 Дать всем дни', 'global_give_days')]
     ]);
-    ctx.replyWithHTML('<b>🛠 Панель управления</b>', kb);
+    ctx.replyWithMarkdownV2('**🛠 Панель управления**', kb);
 });
 
 bot.action('admin_menu_back', async (ctx) => {
@@ -133,27 +140,37 @@ bot.action('admin_menu_back', async (ctx) => {
         [Markup.button.callback('🎟 Промокоды', 'admin_promo_list'), Markup.button.callback('📢 Рассылка', 'global_msg')],
         [Markup.button.callback('🎁 Дать всем дни', 'global_give_days')]
     ]);
-    await ctx.editMessageText('<b>🛠 Панель управления</b>', { parse_mode: 'HTML', ...kb });
+    await ctx.editMessageText('**🛠 Панель управления**', { parse_mode: 'MarkdownV2', ...kb });
 });
 
-// Юзеры и Сервера (обработка кнопок)
 bot.action('admin_users', async (ctx) => {
     await ctx.answerCbQuery();
-    const { data: users } = await supabase.from('vpn_subs').select('id, internal_name').limit(20);
+    const { data: users, count } = await supabase.from('vpn_subs').select('id, internal_name', { count: 'exact' }).limit(20);
     const buttons = users.map(u => [Markup.button.callback(u.internal_name, `manage_user_${u.id}`)]);
     buttons.push([Markup.button.callback('⬅️ Назад', 'admin_menu_back')]);
-    ctx.editMessageText('<b>Список юзеров:</b>', Markup.inlineKeyboard(buttons));
+    
+    await ctx.editMessageText(`**Список юзеров:**\n\nВсего юзеров: ${count || 0}`, { 
+        parse_mode: 'MarkdownV2', 
+        ...Markup.inlineKeyboard(buttons) 
+    });
 });
 
 bot.action(/^manage_user_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const { data: u } = await supabase.from('vpn_subs').select('*').eq('id', ctx.match[1]).single();
     const kb = Markup.inlineKeyboard([
-        [Markup.button.callback('➕ Добавить дни', `add_days_ask_${u.id}`), Markup.button.callback('🗑 Удалить подписку', `del_sub_final_${u.id}`)],
+        [Markup.button.callback('➕ Добавить дни', `add_days_ask_${u.id}`), Markup.button.callback('📅 Уст. дату', `set_date_ask_${u.id}`)],
+        [Markup.button.callback('🗑 Удалить подписку', `del_sub_final_${u.id}`)],
         [Markup.button.callback('💬 Написать юзеру', `msg_user_${u.id}`)],
         [Markup.button.callback('⬅️ Назад', 'admin_users')]
     ]);
-    ctx.editMessageText(`<b>Юзер:</b> ${u.internal_name}\n<b>До:</b> ${u.expires_at}`, { parse_mode: 'HTML', ...kb });
+    ctx.editMessageText(`**Юзер:** ${u.internal_name}\n**До:** ${u.expires_at}`, { parse_mode: 'MarkdownV2', ...kb });
+});
+
+bot.action(/^set_date_ask_(.+)$/, (ctx) => {
+    ctx.answerCbQuery();
+    userStates[ctx.from.id] = { action: 'set_date_manual', targetId: ctx.match[1] };
+    ctx.reply('Введите новую дату в формате ГГГГ-ММ-ДД:');
 });
 
 bot.action(/^del_sub_final_(.+)$/, async (ctx) => {
@@ -167,14 +184,14 @@ bot.action('admin_servers_list', async (ctx) => {
     const { data: servers } = await supabase.from('vpn_servers').select('id, name');
     const buttons = servers.map(s => [Markup.button.callback(s.name, `manage_srv_${s.id}`)]);
     buttons.push([Markup.button.callback('➕ Добавить сервер', 'srv_add_new')], [Markup.button.callback('⬅️ Назад', 'admin_menu_back')]);
-    ctx.editMessageText('<b>Сервера:</b>', Markup.inlineKeyboard(buttons));
+    ctx.editMessageText('**Сервера:**', { parse_mode: 'MarkdownV2', ...Markup.inlineKeyboard(buttons) });
 });
 
 bot.action(/^manage_srv_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const { data: s } = await supabase.from('vpn_servers').select('*').eq('id', ctx.match[1]).single();
-    ctx.editMessageText(`<b>Сервер:</b> ${s.name}\nVLESS: <code>${s.vless_url.substring(0, 30)}...</code>`, {
-        parse_mode: 'HTML',
+    ctx.editMessageText(`**Сервер:** ${s.name}\n\nVLESS: \`${s.vless_url.substring(0, 30)}...\``, {
+        parse_mode: 'MarkdownV2',
         ...Markup.inlineKeyboard([[Markup.button.callback('🗑 Удалить', `srv_del_${s.id}`)], [Markup.button.callback('⬅️ Назад', 'admin_servers_list')]])
     });
 });
@@ -185,7 +202,6 @@ bot.action(/^srv_del_(.+)$/, async (ctx) => {
     ctx.editMessageText('✅ Сервер удален.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'admin_servers_list')]]));
 });
 
-// Промокоды (список и удаление)
 bot.action('admin_promo_list', async (ctx) => {
     await ctx.answerCbQuery();
     const { data: promos } = await supabase.from('promocodes').select('*');
@@ -195,11 +211,6 @@ bot.action('admin_promo_list', async (ctx) => {
         await ctx.reply(`🎟 ${p.code} | ${p.days}дн`, kb);
     }
     ctx.reply('Админ:', Markup.inlineKeyboard([[Markup.button.callback('➕ Создать', 'admin_add_promo_info')], [Markup.button.callback('⬅️ Назад', 'admin_menu_back')]]));
-});
-
-bot.action('admin_add_promo_info', (ctx) => {
-    ctx.answerCbQuery();
-    ctx.reply('Используй команду: /add_promo КОД | ТАРИФ | ДНИ | КОЛ-ВО');
 });
 
 bot.command('add_promo', async (ctx) => {
@@ -216,24 +227,30 @@ bot.action(/^del_promo_(.+)$/, async (ctx) => {
     ctx.deleteMessage();
 });
 
-// Регистрация состояний
+// Регистрация колбэков для ввода
 bot.action('global_msg', (ctx) => { ctx.answerCbQuery(); userStates[ctx.from.id] = { action: 'msg_all' }; ctx.reply('Текст рассылки:'); });
 bot.action('global_give_days', (ctx) => { ctx.answerCbQuery(); userStates[ctx.from.id] = { action: 'give_days_all' }; ctx.reply('Сколько дней добавить ВСЕМ?'); });
 bot.action('srv_add_new', (ctx) => { ctx.answerCbQuery(); userStates[ctx.from.id] = { action: 'srv_add_step1' }; ctx.reply('Пришлите VLESS ссылку:'); });
 bot.action(/^add_days_ask_(.+)$/, (ctx) => { ctx.answerCbQuery(); userStates[ctx.from.id] = { action: 'add_days_manual', targetId: ctx.match[1] }; ctx.reply('Сколько дней добавить?'); });
 bot.action(/^msg_user_(.+)$/, (ctx) => { ctx.answerCbQuery(); userStates[ctx.from.id] = { action: 'msg_single', targetId: ctx.match[1] }; ctx.reply('Текст сообщения:'); });
 
-// Обычные кнопки
+// --- ПРОФИЛЬ ---
 bot.hears('👤 Профиль', async (ctx) => {
     const username = ctx.from.username || ctx.from.first_name;
     let { data: subs } = await supabase.from('vpn_subs').select('*').ilike('internal_name', `%${username}%`);
     if (!subs || subs.length === 0) return ctx.reply('Подписок нет.');
+    
     for (const s of subs) {
         await supabase.from('vpn_subs').update({ tg_chat_id: ctx.from.id.toString() }).eq('id', s.id);
-        const report = `👤 Профиль: <b>@${username}</b>\n🕗 До: <code>${s.expires_at}</code>\n🔗 <code>https://psychosisvpn.vercel.app/api/get_sub?id=${s.id}</code>`;
-        await ctx.replyWithHTML(report);
+        const d = new Date(s.expires_at);
+        const formattedDate = `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}.${d.getFullYear()}`;
+        
+        const report = `👤 Профиль: **@${username}**\n🕗 До: **${formattedDate}**\n💎 Тариф: **${(s.tariff_type || 'BOTH').toUpperCase()}**\n\n🔗 \`https://psychosisvpn.vercel.app/api/get_sub?id=${s.id}\``;
+        
+        await ctx.replyWithMarkdownV2(report);
     }
 });
+
 bot.hears('🎟 Промокод', (ctx) => ctx.reply('Введите ваш промокод:'));
 bot.hears('💎 Покупка', (ctx) => ctx.reply('Админ: @psychosisvpn'));
 
