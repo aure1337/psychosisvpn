@@ -119,7 +119,7 @@ bot.on('text', async (ctx, next) => {
         if (state.action === 'msg_all') {
             const { data: users } = await supabase.from('vpn_subs').select('tg_chat_id');
             let success = 0;
-            ctx.reply('⏳ Начинаю рассылку, подождите...');
+            ctx.reply('⏳ Начинаю рассылку...');
             for (const u of users) {
                 if (u.tg_chat_id) {
                     try { 
@@ -140,11 +140,11 @@ bot.on('text', async (ctx, next) => {
             const { data: s } = await supabase.from('vpn_subs').select('expires_at').eq('id', state.targetId).single();
             const newDate = addDaysToDate(s.expires_at === '2000-01-01' ? new Date() : s.expires_at, input);
             await supabase.from('vpn_subs').update({ expires_at: newDate, tariff_type: 'both', profile_title: 'Psychosis VPN | Premium' }).eq('id', state.targetId);
-            ctx.reply(`✅ Подписка выдана/продлена. Новая дата: ${formatDate(newDate)}`);
+            ctx.reply(`✅ Подписка выдана. До: ${formatDate(newDate)}`);
         }
         else if (state.action === 'set_date_manual') {
             await supabase.from('vpn_subs').update({ expires_at: input, tariff_type: 'both', profile_title: 'Psychosis VPN | Premium' }).eq('id', state.targetId);
-            ctx.reply(`✅ Новая дата установлена: ${formatDate(input)}`);
+            ctx.reply(`✅ Новая дата: ${formatDate(input)}`);
         }
         else if (state.action === 'srv_add_step1') {
             userStates[userId] = { action: 'srv_add_step2', vless: input };
@@ -160,24 +160,61 @@ bot.on('text', async (ctx, next) => {
     const serviceButtons = ['👤 Профиль', '💎 Покупка', '🎟 Промокод', '🎁 Тест Период', '🛠 Админ-панель'];
     if (ctx.message.text.startsWith('/') || serviceButtons.includes(ctx.message.text)) return next();
 
-    const { data: promo } = await supabase.from('promocodes').select('*').eq('code', ctx.message.text.trim()).maybeSingle();
+    // --- ЛОГИКА ПРОМОКОДА (ИСПРАВЛЕННАЯ) ---
+    const codeInput = ctx.message.text.trim();
+    const { data: promo } = await supabase.from('promocodes').select('*').eq('code', codeInput).maybeSingle();
+
     if (promo) {
-        if (promo.used_count >= promo.max_uses) return ctx.reply('❌ Промокод больше не действителен.');
-        
-        const { data: sub } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', ctx.from.id.toString()).maybeSingle();
-        const currentExp = (sub && sub.expires_at !== '2000-01-01') ? sub.expires_at : new Date().toISOString().split('T')[0];
+        // 1. Проверяем общий лимит активаций промокода
+        if (promo.used_count >= promo.max_uses) {
+            return ctx.reply('❌ Этот промокод закончился (превышен лимит активаций).');
+        }
+
+        // 2. Ищем юзера или создаем, если зашел в первый раз
+        let { data: sub } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', ctx.from.id.toString()).maybeSingle();
+        if (!sub) {
+            const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+            const { data: newSub } = await supabase.from('vpn_subs').insert([{
+                internal_name: username,
+                tg_chat_id: ctx.from.id.toString(),
+                expires_at: '2000-01-01',
+                profile_title: 'Psychosis VPN | Free'
+            }]).select().single();
+            sub = newSub;
+        }
+
+        // 3. Проверяем, не использовал ли ЭТОТ юзер ЭТОТ промокод ранее
+        const { data: alreadyUsed } = await supabase.from('promo_activations')
+            .select('id')
+            .eq('user_id', sub.id)
+            .eq('promo_id', promo.id)
+            .maybeSingle();
+
+        if (alreadyUsed) {
+            return ctx.reply('❌ Вы уже активировали этот промокод ранее!');
+        }
+
+        // 4. Если всё ок — начисляем дни
+        const todayStr = new Date().toISOString().split('T')[0];
+        const currentExp = (sub.expires_at === '2000-01-01' || sub.expires_at < todayStr) ? todayStr : sub.expires_at;
         const newDate = addDaysToDate(currentExp, promo.days);
 
+        // Обновляем подписку
         await supabase.from('vpn_subs').update({ 
             expires_at: newDate, 
-            tariff_type: promo.tariff_type,
+            tariff_type: promo.tariff_type || 'both',
             profile_title: 'Psychosis VPN | Premium' 
-        }).eq('tg_chat_id', ctx.from.id.toString());
+        }).eq('id', sub.id);
         
+        // Увеличиваем счетчик в промокодах
         await supabase.from('promocodes').update({ used_count: promo.used_count + 1 }).eq('id', promo.id);
-        ctx.reply(`✅ Промокод активирован! Ваша подписка до ${formatDate(newDate)}`);
+
+        // Записываем факт использования, чтобы не было повтора
+        await supabase.from('promo_activations').insert([{ user_id: sub.id, promo_id: promo.id }]);
+
+        return ctx.replyWithHTML(`✅ Промокод активирован!\nНачислено: <b>${promo.days}</b> дн.\nПодписка до: <b>${formatDate(newDate)}</b>`);
     } else if (ctx.message.text === '🎟 Промокод') {
-        ctx.reply('Введите ваш промокод:');
+        return ctx.reply('Введите ваш промокод:');
     }
 });
 
