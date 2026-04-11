@@ -30,7 +30,6 @@ function formatDate(dateStr) {
 }
 
 async function getMainMenu(ctx) {
-    // Убрали кнопку Тест из главного меню, теперь она в Профиле
     const buttons = [['👤 Профиль', '💎 Покупка'], ['🎟 Промокод']];
     if (ADMINS.includes(ctx.from.id)) buttons.push(['🛠 Админ-панель']);
     return Markup.keyboard(buttons).resize();
@@ -45,7 +44,8 @@ bot.start(async (ctx) => {
     if (!exists) {
         await supabase.from('vpn_subs').insert([{
             internal_name: username, tg_chat_id: userId, tariff_type: 'none',
-            expires_at: '2000-01-01', profile_title: 'Psychosis VPN | Free'
+            expires_at: '2000-01-01', profile_title: 'Psychosis VPN | Free',
+            test_used: false // Добавили инициализацию
         }]);
     } else {
         await supabase.from('vpn_subs').update({ internal_name: username }).eq('tg_chat_id', userId);
@@ -53,7 +53,7 @@ bot.start(async (ctx) => {
     ctx.reply('Psychosis VPN запущен!', await getMainMenu(ctx));
 });
 
-// --- ПРОФИЛЬ С ИНЛАЙН КНОПКОЙ ТЕСТА ---
+// --- ПРОФИЛЬ С ИНЛАЙН КНОПКАМИ ---
 bot.hears('👤 Профиль', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
@@ -65,10 +65,14 @@ bot.hears('👤 Профиль', async (ctx) => {
     const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n🕗 До: <b>${isExpired ? '-' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${isExpired ? 'Нету' : (TARIFF_MAP[s.tariff_type] || 'Нету')}</b>\n\n🔗 <code>${subUrl}</code>`;
     
     const inlineButtons = [];
-    // Если в названии профиля НЕТ слова TEST — показываем кнопку теста
-    if (!s?.profile_title?.includes('TEST')) {
+    
+    // Условие: тест еще НЕ брали (test_used === false) И (подписка кончилась ИЛИ тариф none)
+    if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
         inlineButtons.push([Markup.button.callback('🎁 Взять тест-период (5 дн.)', 'activate_test_profile')]);
     }
+
+    // Добавляем кнопку промокода
+    inlineButtons.push([Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]);
 
     await ctx.replyWithHTML(report, Markup.inlineKeyboard(inlineButtons));
 });
@@ -78,30 +82,41 @@ bot.action('activate_test_profile', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: user } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
 
-    if (user?.profile_title?.includes('TEST')) {
-        return ctx.answerCbQuery('Вы уже использовали тест!', { show_alert: true });
+    // Двойная защита от хитрых юзеров
+    if (user?.test_used) {
+        return ctx.answerCbQuery('❌ Вы уже использовали тестовый период!', { show_alert: true });
     }
 
     const testDays = 5;
-    const newDate = addDaysToDate('2000-01-01', testDays); // Считаем от сегодня
+    const newDate = addDaysToDate('2000-01-01', testDays); 
 
     await supabase.from('vpn_subs').update({ 
         tariff_type: 'both', 
         expires_at: newDate, 
-        profile_title: 'Psychosis VPN | TEST' 
+        profile_title: 'Psychosis VPN | TEST',
+        test_used: true // Записываем в базу, что тест взят
     }).eq('tg_chat_id', userId);
 
     await ctx.answerCbQuery('✅ Тест на 5 дней активирован!', { show_alert: true });
     
-    // Обновляем сообщение профиля, чтобы кнопка исчезла
     const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${user?.id}`;
     const updatedReport = `👤 Профиль: <b>${user?.internal_name}</b>\n🕗 До: <b>${formatDate(newDate)}</b>\n💎 Тариф: <b>${TARIFF_MAP['both']}</b>\n\n🔗 <code>${subUrl}</code>\n\n✅ <i>Тестовый период успешно активирован!</i>`;
     
+    const newInlineKb = Markup.inlineKeyboard([
+        [Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')] // Оставляем только промокод
+    ]);
+
     try {
-        await ctx.editMessageText(updatedReport, { parse_mode: 'HTML' });
+        await ctx.editMessageText(updatedReport, { parse_mode: 'HTML', ...newInlineKb });
     } catch (e) {
         ctx.replyWithHTML('✅ Тест активирован! Перезайдите в профиль для обновления данных.');
     }
+});
+
+// ОБРАБОТКА ИНЛАЙН КНОПКИ ПРОМОКОДА
+bot.action('enter_promo_inline', (ctx) => {
+    ctx.reply('🎟 Введите ваш промокод:');
+    ctx.answerCbQuery();
 });
 
 // --- АДМИН-ПАНЕЛЬ ГЛАВНАЯ ---
