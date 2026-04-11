@@ -46,8 +46,8 @@ export default async function handler(req, res) {
 
   if (isExpired) {
     // Если подписка кончилась
-    announce = `Ваша подписка закончилась, оплатите ее в боте: @psychosisvpn_bot | Поддержка @aure_ember`;
-    links = `vless://95557ad5-5d90-4f80-a1e2-a72fda60ca4b@tr2.psychosis.online:443?type=xhttp&path=%2Fapi%2Fv1%2Fupdate&host=www.amd.com&mode=packet-up&security=reality&fp=chrome&pbk=tUPkeHSKsD6p2HxTzEsco7vwStKP96ZmsWxaiLL6LXQ&sni=www.amd.com&sid=3c6a9a085be490f2#Оплатите подписку - @psychosisvpn_bot`;
+    announce = `Подписка закончилась, оплатите ее в боте: @psychosisvpn_bot | Поддержка @aure_ember`;
+    links = `vless://95557ad5-5d90-4f80-a1e2-a72fda60ca4b@tr2.psychosis.online:443?type=xhttp&path=%2Fapi%2Fv1%2Fupdate&host=www.amd.com&mode=packet-up&security=reality&fp=chrome&pbk=tUPkeHSKsD6p2HxTzEsco7vwStKP96ZmsWxaiLL6LXQ&sni=www.amd.com&sid=3c6a9a085be490f2#Оплатите: @psychosisvpn_bot`;
   } else {
     // Если всё ок — грузим реальные сервера
     let query = supabase.from('vpn_servers').select('*').order('sort_index', { ascending: true });
