@@ -64,13 +64,19 @@ bot.hears('👤 Профиль', async (ctx) => {
     const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
     
     const today = new Date().toISOString().split('T')[0];
+    const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${s?.id}`;
 
-    // Жесткая проверка: если дата 2000 год или дата меньше сегодняшней (по строке)
+    // Если юзера нет или подписка неактивна (2000 год или дата в прошлом)
     if (!s || s.expires_at === '2000-01-01' || s.expires_at < today) {
-        return ctx.reply('У вас нет активной подписки.', await getMainMenu(ctx));
+        const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n🕗 До: <b>-</b>\n💎 Тариф: <b>Нету</b>\n\n🔗 <code>${subUrl}</code>`;
+        return ctx.replyWithHTML(report, await getMainMenu(ctx));
     }
 
-    const report = `👤 Профиль: <b>${s.internal_name}</b>\n🕗 До: <b>${formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${(s.tariff_type || 'BOTH').toUpperCase()}</b>\n\n🔗 <code>https://psychosisvpn.vercel.app/api/get_sub?id=${s.id}</code>`;
+    // Если подписка активна
+    const tMap = { 'both': 'BOTH', 'white': 'WHITE', 'base': 'BASE' };
+    const tariff = tMap[s.tariff_type] || (s.tariff_type || 'NONE').toUpperCase();
+    
+    const report = `👤 Профиль: <b>${s.internal_name}</b>\n🕗 До: <b>${formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${tariff}</b>\n\n🔗 <code>${subUrl}</code>`;
     await ctx.replyWithHTML(report);
 });
 
