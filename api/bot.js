@@ -45,7 +45,7 @@ bot.start(async (ctx) => {
         await supabase.from('vpn_subs').insert([{
             internal_name: username, tg_chat_id: userId, tariff_type: 'none',
             expires_at: '2000-01-01', profile_title: 'Psychosis VPN | Free',
-            test_used: false // Добавили инициализацию
+            test_used: false
         }]);
     } else {
         await supabase.from('vpn_subs').update({ internal_name: username }).eq('tg_chat_id', userId);
@@ -66,35 +66,31 @@ bot.hears('👤 Профиль', async (ctx) => {
     
     const inlineButtons = [];
     
-    // Условие: тест еще НЕ брали (test_used === false) И (подписка кончилась ИЛИ тариф none)
     if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
         inlineButtons.push([Markup.button.callback('🎁 Взять тест-период (5 дн.)', 'activate_test_profile')]);
     }
 
-    // Добавляем кнопку промокода
     inlineButtons.push([Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]);
 
     await ctx.replyWithHTML(report, Markup.inlineKeyboard(inlineButtons));
 });
 
-// ОБРАБОТКА НАЖАТИЯ КНОПКИ ТЕСТА В ПРОФИЛЕ
+// ОБРАБОТКА НАЖАТИЯ КНОПКИ ТЕСТА
 bot.action('activate_test_profile', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: user } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
 
-    // Двойная защита от хитрых юзеров
     if (user?.test_used) {
         return ctx.answerCbQuery('❌ Вы уже использовали тестовый период!', { show_alert: true });
     }
 
-    const testDays = 5;
-    const newDate = addDaysToDate('2000-01-01', testDays); 
+    const newDate = addDaysToDate('2000-01-01', 5); 
 
     await supabase.from('vpn_subs').update({ 
         tariff_type: 'both', 
         expires_at: newDate, 
         profile_title: 'Psychosis VPN | TEST',
-        test_used: true // Записываем в базу, что тест взят
+        test_used: true 
     }).eq('tg_chat_id', userId);
 
     await ctx.answerCbQuery('✅ Тест на 5 дней активирован!', { show_alert: true });
@@ -102,18 +98,16 @@ bot.action('activate_test_profile', async (ctx) => {
     const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${user?.id}`;
     const updatedReport = `👤 Профиль: <b>${user?.internal_name}</b>\n🕗 До: <b>${formatDate(newDate)}</b>\n💎 Тариф: <b>${TARIFF_MAP['both']}</b>\n\n🔗 <code>${subUrl}</code>\n\n✅ <i>Тестовый период успешно активирован!</i>`;
     
-    const newInlineKb = Markup.inlineKeyboard([
-        [Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')] // Оставляем только промокод
-    ]);
-
     try {
-        await ctx.editMessageText(updatedReport, { parse_mode: 'HTML', ...newInlineKb });
+        await ctx.editMessageText(updatedReport, { 
+            parse_mode: 'HTML', 
+            ...Markup.inlineKeyboard([[Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]]) 
+        });
     } catch (e) {
-        ctx.replyWithHTML('✅ Тест активирован! Перезайдите в профиль для обновления данных.');
+        ctx.replyWithHTML('✅ Тест активирован! Перезайдите в профиль.');
     }
 });
 
-// ОБРАБОТКА ИНЛАЙН КНОПКИ ПРОМОКОДА
 bot.action('enter_promo_inline', (ctx) => {
     ctx.reply('🎟 Введите ваш промокод:');
     ctx.answerCbQuery();
@@ -153,6 +147,27 @@ bot.action(/^manage_user_(.+)$/, async (ctx) => {
         [Markup.button.callback('⬅️ Назад', 'admin_users')]
     ]);
     ctx.editMessageText(`<b>Юзер:</b> ${u.internal_name}\n<b>До:</b> ${formatDate(u.expires_at)}`, { parse_mode: 'HTML', ...kb });
+});
+
+// НОВАЯ ЛОГИКА: Написать юзеру
+bot.action(/^msg_user_(.+)$/, async (ctx) => {
+    const uid = ctx.match[1];
+    userStates[ctx.from.id] = { action: 'msg_single_user', targetId: uid };
+    ctx.reply('Введите сообщение для пользователя:');
+    ctx.answerCbQuery();
+});
+
+// НОВАЯ ЛОГИКА: Аннулировать подписку
+bot.action(/^del_sub_final_(.+)$/, async (ctx) => {
+    const uid = ctx.match[1];
+    await supabase.from('vpn_subs').update({ 
+        expires_at: '2000-01-01', 
+        tariff_type: 'none', 
+        profile_title: 'Psychosis VPN | Free' 
+    }).eq('id', uid);
+    
+    ctx.answerCbQuery('✅ Подписка аннулирована');
+    ctx.editMessageText('✅ Подписка аннулирована.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ К юзерам', 'admin_users')]]));
 });
 
 bot.action(/^adm_sel_trf_(.+)$/, async (ctx) => {
@@ -225,7 +240,7 @@ bot.action(/^promo_del_(.+)$/, async (ctx) => {
     ctx.editMessageText('✅ Удалено.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'admin_promo_list')]]));
 });
 
-// --- ОБРАБОТКА ТЕКСТА ---
+// --- ОБРАБОТКА ТЕКСТА (STATE MACHINE) ---
 bot.on('text', async (ctx, next) => {
     const userId = ctx.from.id;
     const state = userStates[userId];
@@ -252,8 +267,26 @@ bot.on('text', async (ctx, next) => {
         }
         else if (state.action === 'msg_all') {
             const { data: users } = await supabase.from('vpn_subs').select('tg_chat_id');
-            for (const u of users) { try { await bot.telegram.sendMessage(u.tg_chat_id, input); } catch(e){} }
-            ctx.reply('✅ Рассылка завершена.');
+            let successCount = 0;
+            for (const u of users) { 
+                try { 
+                    await bot.telegram.sendMessage(u.tg_chat_id, `📢 Рассылка:\n\n${input}`); 
+                    successCount++;
+                } catch(e){} 
+            }
+            ctx.reply(`✅ Рассылка завершена. Доставлено: ${successCount}`);
+        }
+        else if (state.action === 'msg_single_user') {
+            // ЛОГИКА ОТПРАВКИ ЛИЧНОГО СООБЩЕНИЯ
+            const { data: u } = await supabase.from('vpn_subs').select('tg_chat_id').eq('id', state.targetId).single();
+            if (u) {
+                try {
+                    await bot.telegram.sendMessage(u.tg_chat_id, `✉️ Сообщение от администрации:\n\n${input}`);
+                    ctx.reply('✅ Сообщение успешно отправлено пользователю.');
+                } catch(e) {
+                    ctx.reply('❌ Ошибка отправки. Возможно, юзер заблокировал бота.');
+                }
+            }
         }
         delete userStates[userId]; return;
     }
@@ -297,7 +330,7 @@ bot.action('admin_servers_list', async (ctx) => {
 });
 
 bot.action('global_msg', (ctx) => { userStates[ctx.from.id] = { action: 'msg_all' }; ctx.reply('Введите текст рассылки:'); });
-bot.hears('💎 Покупка', (ctx) => ctx.reply('Для покупки: @psychosisvpn'));
+bot.hears('💎 Покупка', (ctx) => ctx.reply('Для покупки: @aure_ember'));
 
 module.exports = async (req, res) => {
     try { if (req.method === 'POST') await bot.handleUpdate(req.body); } 
