@@ -30,19 +30,18 @@ function formatDate(dateStr) {
 }
 
 async function getMainMenu(ctx) {
-    const userId = ctx.from.id.toString();
-    const { data: user } = await supabase.from('vpn_subs').select('profile_title').eq('tg_chat_id', userId).maybeSingle();
+    // Убрали кнопку Тест из главного меню, теперь она в Профиле
     const buttons = [['👤 Профиль', '💎 Покупка'], ['🎟 Промокод']];
-    if (!user?.profile_title?.includes('TEST')) buttons.push(['🎁 Тест Период']);
     if (ADMINS.includes(ctx.from.id)) buttons.push(['🛠 Админ-панель']);
     return Markup.keyboard(buttons).resize();
 }
 
-// --- СТАРТ И ПРОФИЛЬ ---
+// --- СТАРТ ---
 bot.start(async (ctx) => {
     const userId = ctx.from.id.toString();
     const username = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || 'User');
     const { data: exists } = await supabase.from('vpn_subs').select('id').eq('tg_chat_id', userId).maybeSingle();
+    
     if (!exists) {
         await supabase.from('vpn_subs').insert([{
             internal_name: username, tg_chat_id: userId, tariff_type: 'none',
@@ -54,25 +53,55 @@ bot.start(async (ctx) => {
     ctx.reply('Psychosis VPN запущен!', await getMainMenu(ctx));
 });
 
+// --- ПРОФИЛЬ С ИНЛАЙН КНОПКОЙ ТЕСТА ---
 bot.hears('👤 Профиль', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
+    
     const today = new Date().toISOString().split('T')[0];
     const isExpired = !s || s.expires_at === '2000-01-01' || s.expires_at < today;
     const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${s?.id}`;
+    
     const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n🕗 До: <b>${isExpired ? '-' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${isExpired ? 'Нету' : (TARIFF_MAP[s.tariff_type] || 'Нету')}</b>\n\n🔗 <code>${subUrl}</code>`;
-    await ctx.replyWithHTML(report, await getMainMenu(ctx));
+    
+    const inlineButtons = [];
+    // Если в названии профиля НЕТ слова TEST — показываем кнопку теста
+    if (!s?.profile_title?.includes('TEST')) {
+        inlineButtons.push([Markup.button.callback('🎁 Взять тест-период (5 дн.)', 'activate_test_profile')]);
+    }
+
+    await ctx.replyWithHTML(report, Markup.inlineKeyboard(inlineButtons));
 });
 
-bot.hears('🎁 Тест Период', async (ctx) => {
+// ОБРАБОТКА НАЖАТИЯ КНОПКИ ТЕСТА В ПРОФИЛЕ
+bot.action('activate_test_profile', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: user } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
-    if (user?.profile_title?.includes('TEST')) return ctx.reply('Вы уже использовали тест!');
-    const expDate = new Date();
-    expDate.setDate(expDate.getDate() + 5);
-    const dateStr = expDate.toISOString().split('T')[0];
-    await supabase.from('vpn_subs').update({ tariff_type: 'both', expires_at: dateStr, profile_title: 'Psychosis VPN | TEST' }).eq('tg_chat_id', userId);
-    ctx.replyWithHTML(`🎁 Тестовый период 5 дней активирован!`, await getMainMenu(ctx));
+
+    if (user?.profile_title?.includes('TEST')) {
+        return ctx.answerCbQuery('Вы уже использовали тест!', { show_alert: true });
+    }
+
+    const testDays = 5;
+    const newDate = addDaysToDate('2000-01-01', testDays); // Считаем от сегодня
+
+    await supabase.from('vpn_subs').update({ 
+        tariff_type: 'both', 
+        expires_at: newDate, 
+        profile_title: 'Psychosis VPN | TEST' 
+    }).eq('tg_chat_id', userId);
+
+    await ctx.answerCbQuery('✅ Тест на 5 дней активирован!', { show_alert: true });
+    
+    // Обновляем сообщение профиля, чтобы кнопка исчезла
+    const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${user?.id}`;
+    const updatedReport = `👤 Профиль: <b>${user?.internal_name}</b>\n🕗 До: <b>${formatDate(newDate)}</b>\n💎 Тариф: <b>${TARIFF_MAP['both']}</b>\n\n🔗 <code>${subUrl}</code>\n\n✅ <i>Тестовый период успешно активирован!</i>`;
+    
+    try {
+        await ctx.editMessageText(updatedReport, { parse_mode: 'HTML' });
+    } catch (e) {
+        ctx.replyWithHTML('✅ Тест активирован! Перезайдите в профиль для обновления данных.');
+    }
 });
 
 // --- АДМИН-ПАНЕЛЬ ГЛАВНАЯ ---
@@ -156,7 +185,7 @@ bot.action(/^manage_promo_(.+)$/, async (ctx) => {
     const { data: p } = await supabase.from('promocodes').select('*').eq('id', ctx.match[1]).single();
     const kb = Markup.inlineKeyboard([
         [Markup.button.callback('🔄 Обнулить активации', `promo_res_${p.id}`)],
-        [Markup.button.callback('➕ Добавить лимит', `promo_lim_${p.id}`), Markup.button.callback('📅 Дни', `promo_day_${p.id}`)],
+        [Markup.button.callback('⚙️ Изменить лимит', `promo_lim_${p.id}`), Markup.button.callback('📅 Дни', `promo_day_${p.id}`)],
         [Markup.button.callback('🗑 Удалить', `promo_del_${p.id}`)],
         [Markup.button.callback('⬅️ Назад', 'admin_promo_list')]
     ]);
@@ -167,15 +196,14 @@ bot.action('admin_promo_add', (ctx) => {
     ctx.reply('Для создания используй команду:\n`/add_promo КОД | both | ДНИ | КОЛ_ВО`\n\nПример:\n`/add_promo TEST30 | both | 30 | 50`', { parse_mode: 'Markdown' });
 });
 
-// Действия с промо
 bot.action(/^promo_res_(.+)$/, async (ctx) => {
     await supabase.from('promocodes').update({ used_count: 0 }).eq('id', ctx.match[1]);
     await supabase.from('promo_activations').delete().eq('promo_id', ctx.match[1]);
     ctx.answerCbQuery('Обнулено');
-    ctx.editMessageText('✅ Промокод обнулен. Теперь его снова могут использовать все.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'admin_promo_list')]]));
+    ctx.editMessageText('✅ Промокод обнулен.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'admin_promo_list')]]));
 });
 
-bot.action(/^promo_lim_(.+)$/, (ctx) => { userStates[ctx.from.id] = { action: 'promo_limit', targetId: ctx.match[1] }; ctx.reply('На сколько увеличить лимит активаций?'); });
+bot.action(/^promo_lim_(.+)$/, (ctx) => { userStates[ctx.from.id] = { action: 'promo_limit', targetId: ctx.match[1] }; ctx.reply('Введите НОВОЕ общее количество активаций:'); });
 bot.action(/^promo_day_(.+)$/, (ctx) => { userStates[ctx.from.id] = { action: 'promo_days', targetId: ctx.match[1] }; ctx.reply('Сколько дней теперь будет давать промо?'); });
 bot.action(/^promo_del_(.+)$/, async (ctx) => {
     await supabase.from('promocodes').delete().eq('id', ctx.match[1]);
@@ -200,9 +228,8 @@ bot.on('text', async (ctx, next) => {
             ctx.reply('✅ Дата установлена.');
         }
         else if (state.action === 'promo_limit') {
-            const { data: p } = await supabase.from('promocodes').select('max_uses').eq('id', state.targetId).single();
-            await supabase.from('promocodes').update({ max_uses: p.max_uses + parseInt(input) }).eq('id', state.targetId);
-            ctx.reply('✅ Лимит обновлен.');
+            await supabase.from('promocodes').update({ max_uses: parseInt(input) }).eq('id', state.targetId);
+            ctx.reply(`✅ Новый лимит установлен: ${input}`);
         }
         else if (state.action === 'promo_days') {
             await supabase.from('promocodes').update({ days: parseInt(input) }).eq('id', state.targetId);
