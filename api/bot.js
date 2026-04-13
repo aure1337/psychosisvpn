@@ -1,5 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
+const crypto = require('crypto'); // Добавили для подписи FreeKassa
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
@@ -7,12 +8,23 @@ const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 const ADMINS = [1192691079, 7761584076, 6443614614];
 const userStates = {}; 
 
+// --- НАСТРОЙКИ FREEKASSA ---
+const FK_ID = 'ТВОЙ_ID_МАГАЗИНА'; // Замени на свой ID
+const FK_KEY = 'ТВОЙ_СЕКРЕТНЫЙ_КЛЮЧ_1'; // Замени на секретный ключ №1
+
 const TARIFF_MAP = {
     'both': 'Обход и Впн',
     'white': 'Обход',
     'base': 'Базовый Впн',
     'none': 'Нету'
 };
+
+const PRICES = [
+    { days: 30, price: 65, label: '1 месяц - 65₽ (-5%)' },
+    { days: 90, price: 150, label: '3 месяца - 150₽ (-25%)' },
+    { days: 180, price: 350, label: '6 месяцев - 350₽ (-10%)' },
+    { days: 365, price: 590, label: '12 месяцев - 590₽ (-25%)' }
+];
 
 // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 function addDaysToDate(baseDateStr, days) {
@@ -45,7 +57,7 @@ bot.start(async (ctx) => {
         await supabase.from('vpn_subs').insert([{
             internal_name: username, tg_chat_id: userId, tariff_type: 'none',
             expires_at: '2000-01-01', profile_title: 'Psychosis VPN | Free',
-            test_used: false
+            test_used: false, balance: 0 // Добавили баланс 0 при старте
         }]);
     } else {
         await supabase.from('vpn_subs').update({ internal_name: username }).eq('tg_chat_id', userId);
@@ -62,10 +74,13 @@ bot.hears('👤 Профиль', async (ctx) => {
     const isExpired = !s || s.expires_at === '2000-01-01' || s.expires_at < today;
     const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${s?.id}`;
     
-    const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n🕗 До: <b>${isExpired ? '-' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${isExpired ? 'Нету' : (TARIFF_MAP[s.tariff_type] || 'Нету')}</b>\n\n🔗 <code>${subUrl}</code>`;
+    const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n💰 Баланс: <b>${s?.balance || 0}₽</b>\n🕗 До: <b>${isExpired ? '-' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${isExpired ? 'Нету' : (TARIFF_MAP[s.tariff_type] || 'Нету')}</b>\n\n🔗 <code>${subUrl}</code>`;
     
     const inlineButtons = [];
     
+    // Кнопка пополнения
+    inlineButtons.push([Markup.button.callback('💳 Пополнить баланс', 'topup_init')]);
+
     if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
         inlineButtons.push([Markup.button.callback('🎁 Взять тест-период (5 дн.)', 'activate_test_profile')]);
     }
@@ -73,6 +88,13 @@ bot.hears('👤 Профиль', async (ctx) => {
     inlineButtons.push([Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]);
 
     await ctx.replyWithHTML(report, Markup.inlineKeyboard(inlineButtons));
+});
+
+// --- ЛОГИКА ПОПОЛНЕНИЯ FREEKASSA ---
+bot.action('topup_init', (ctx) => {
+    userStates[ctx.from.id] = { action: 'wait_amount' };
+    ctx.reply('Введите сумму пополнения в рублях (например, 150):');
+    ctx.answerCbQuery();
 });
 
 // ОБРАБОТКА НАЖАТИЯ КНОПКИ ТЕСТА
@@ -96,12 +118,15 @@ bot.action('activate_test_profile', async (ctx) => {
     await ctx.answerCbQuery('✅ Тест на 5 дней активирован!', { show_alert: true });
     
     const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${user?.id}`;
-    const updatedReport = `👤 Профиль: <b>${user?.internal_name}</b>\n🕗 До: <b>${formatDate(newDate)}</b>\n💎 Тариф: <b>${TARIFF_MAP['both']}</b>\n\n🔗 <code>${subUrl}</code>\n\n✅ <i>Тестовый период успешно активирован!</i>`;
+    const updatedReport = `👤 Профиль: <b>${user?.internal_name}</b>\n💰 Баланс: <b>${user?.balance || 0}₽</b>\n🕗 До: <b>${formatDate(newDate)}</b>\n💎 Тариф: <b>${TARIFF_MAP['both']}</b>\n\n🔗 <code>${subUrl}</code>\n\n✅ <i>Тестовый период успешно активирован!</i>`;
     
     try {
         await ctx.editMessageText(updatedReport, { 
             parse_mode: 'HTML', 
-            ...Markup.inlineKeyboard([[Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]]) 
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('💳 Пополнить баланс', 'topup_init')],
+                [Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]
+            ]) 
         });
     } catch (e) {
         ctx.replyWithHTML('✅ Тест активирован! Перезайдите в профиль.');
@@ -111,6 +136,32 @@ bot.action('activate_test_profile', async (ctx) => {
 bot.action('enter_promo_inline', (ctx) => {
     ctx.reply('🎟 Введите ваш промокод:');
     ctx.answerCbQuery();
+});
+
+// --- ПОКУПКА ---
+bot.hears('💎 Покупка', async (ctx) => {
+    const buttons = PRICES.map((p, i) => [Markup.button.callback(p.label, `buy_pkg_${i}`)]);
+    ctx.replyWithHTML('<b>Выберите период подписки:</b>\n<i>Тариф: Обход и Впн</i>', Markup.inlineKeyboard(buttons));
+});
+
+bot.action(/^buy_pkg_(\d+)$/, async (ctx) => {
+    const pkg = PRICES[ctx.match[1]];
+    const userId = ctx.from.id.toString();
+    const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
+
+    if ((s.balance || 0) < pkg.price) {
+        return ctx.answerCbQuery(`❌ Недостаточно средств! Ваш баланс: ${s.balance || 0}₽`, { show_alert: true });
+    }
+
+    const newDate = addDaysToDate(s.expires_at, pkg.days);
+    await supabase.from('vpn_subs').update({ 
+        balance: s.balance - pkg.price,
+        expires_at: newDate,
+        tariff_type: 'both',
+        profile_title: 'Psychosis VPN | Premium'
+    }).eq('id', s.id);
+
+    ctx.editMessageText(`✅ Вы успешно приобрели тариф "Обход и Впн" на ${pkg.days} дн.!\nСписано: ${pkg.price}₽\nВаша подписка активна до: ${formatDate(newDate)}`);
 });
 
 // --- АДМИН-ПАНЕЛЬ ГЛАВНАЯ ---
@@ -146,7 +197,7 @@ bot.action(/^manage_user_(.+)$/, async (ctx) => {
         [Markup.button.callback('💬 Написать', `msg_user_${u.id}`), Markup.button.callback('🗑 Аннулировать', `del_sub_final_${u.id}`)],
         [Markup.button.callback('⬅️ Назад', 'admin_users')]
     ]);
-    ctx.editMessageText(`<b>Юзер:</b> ${u.internal_name}\n<b>До:</b> ${formatDate(u.expires_at)}`, { parse_mode: 'HTML', ...kb });
+    ctx.editMessageText(`<b>Юзер:</b> ${u.internal_name}\n<b>До:</b> ${formatDate(u.expires_at)}\n<b>Баланс:</b> ${u.balance || 0}₽`, { parse_mode: 'HTML', ...kb });
 });
 
 // НОВАЯ ЛОГИКА: Написать юзеру
@@ -219,11 +270,11 @@ bot.action(/^manage_promo_(.+)$/, async (ctx) => {
         [Markup.button.callback('🗑 Удалить', `promo_del_${p.id}`)],
         [Markup.button.callback('⬅️ Назад', 'admin_promo_list')]
     ]);
-    ctx.editMessageText(`🎟 <b>${p.code}</b>\nДает: ${p.days} дн.\nЮзов: ${p.used_count}/${p.max_uses}\nТариф: ${TARIFF_MAP[p.tariff_type]}`, { parse_mode: 'HTML', ...kb });
+    ctx.editMessageText(`🎟 <b>${p.code}</b>\nДает: ${p.days} дн. | ${p.bonus_rub || 0}₽\nЮзов: ${p.used_count}/${p.max_uses}\nТариф: ${TARIFF_MAP[p.tariff_type]}`, { parse_mode: 'HTML', ...kb });
 });
 
 bot.action('admin_promo_add', (ctx) => {
-    ctx.reply('Для создания используй команду:\n`/add_promo КОД | both | ДНИ | КОЛ_ВО`\n\nПример:\n`/add_promo TEST30 | both | 30 | 50`', { parse_mode: 'Markdown' });
+    ctx.reply('Для создания используй команду:\n`/add_promo КОД | both | ДНИ | КОЛ_ВО | РУБЛИ`\n\nПример (на 30 дней):\n`/add_promo TEST30 | both | 30 | 50 | 0`\nПример (на 100 рублей):\n`/add_promo MONEY100 | both | 0 | 50 | 100`', { parse_mode: 'Markdown' });
 });
 
 bot.action(/^promo_res_(.+)$/, async (ctx) => {
@@ -247,7 +298,23 @@ bot.on('text', async (ctx, next) => {
     const input = ctx.message.text.trim();
 
     if (state) {
-        if (state.action === 'add_days_manual') {
+        // Логика пополнения баланса
+        if (state.action === 'wait_amount') {
+            const amount = parseInt(input);
+            if (isNaN(amount) || amount < 10) return ctx.reply('Минимальная сумма — 10₽. Введите число:');
+            
+            const orderId = `pay_${userId}_${Date.now()}`;
+            // Формируем подпись для FreeKassa
+            const sign = crypto.createHash('md5').update(`${FK_ID}:${amount}:${FK_KEY}:RUB:${orderId}`).digest('hex');
+            const url = `https://pay.freekassa.ru/?m=${FK_ID}&oa=${amount}&o=${orderId}&s=${sign}&currency=RUB`;
+            
+            ctx.reply(`Счет на ${amount}₽ сформирован!`, Markup.inlineKeyboard([
+                [Markup.button.url('💳 Оплатить через FreeKassa', url)]
+            ]));
+            delete userStates[userId];
+            return;
+        }
+        else if (state.action === 'add_days_manual') {
             const { data: s } = await supabase.from('vpn_subs').select('expires_at').eq('id', state.targetId).single();
             const newDate = addDaysToDate(s.expires_at, input);
             await supabase.from('vpn_subs').update({ expires_at: newDate, tariff_type: state.tariff, profile_title: 'Psychosis VPN | Premium' }).eq('id', state.targetId);
@@ -277,7 +344,6 @@ bot.on('text', async (ctx, next) => {
             ctx.reply(`✅ Рассылка завершена. Доставлено: ${successCount}`);
         }
         else if (state.action === 'msg_single_user') {
-            // ЛОГИКА ОТПРАВКИ ЛИЧНОГО СООБЩЕНИЯ
             const { data: u } = await supabase.from('vpn_subs').select('tg_chat_id').eq('id', state.targetId).single();
             if (u) {
                 try {
@@ -302,23 +368,33 @@ bot.on('text', async (ctx, next) => {
         const { data: used } = await supabase.from('promo_activations').select('id').eq('user_id', sub.id).eq('promo_id', promo.id).maybeSingle();
         if (used) return ctx.reply('❌ Вы уже вводили этот код.');
 
-        const newDate = addDaysToDate(sub.expires_at, promo.days);
-        await supabase.from('vpn_subs').update({ expires_at: newDate, tariff_type: promo.tariff_type || 'both', profile_title: 'Psychosis VPN | Premium' }).eq('id', sub.id);
+        // Проверяем, дает ли промокод рубли или дни
+        if (promo.bonus_rub && promo.bonus_rub > 0) {
+            await supabase.from('vpn_subs').update({ balance: (sub.balance || 0) + promo.bonus_rub }).eq('id', sub.id);
+            ctx.replyWithHTML(`✅ Промокод активирован!\nНа ваш баланс зачислено: <b>${promo.bonus_rub}₽</b>`);
+        } else {
+            const newDate = addDaysToDate(sub.expires_at, promo.days);
+            await supabase.from('vpn_subs').update({ expires_at: newDate, tariff_type: promo.tariff_type || 'both', profile_title: 'Psychosis VPN | Premium' }).eq('id', sub.id);
+            ctx.replyWithHTML(`✅ Промокод активирован!\nДобавлено: <b>${promo.days} дн.</b>\nДо: <b>${formatDate(newDate)}</b>`);
+        }
+
         await supabase.from('promocodes').update({ used_count: promo.used_count + 1 }).eq('id', promo.id);
         await supabase.from('promo_activations').insert([{ user_id: sub.id, promo_id: promo.id }]);
-        
-        return ctx.replyWithHTML(`✅ Промокод активирован!\nДобавлено: <b>${promo.days} дн.</b>\nДо: <b>${formatDate(newDate)}</b>`);
+        return;
     }
 
     return next();
 });
 
 // --- КОМАНДЫ И СЕРВЕРА ---
+// Обновили команду создания промокода, чтобы можно было добавлять рубли
 bot.command('add_promo', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
     const p = ctx.message.text.split('/add_promo ')[1]?.split('|').map(x => x.trim());
-    if (!p || p.length < 4) return ctx.reply('Формат: /add_promo КОД | both | ДНИ | КОЛ_ВО');
-    await supabase.from('promocodes').insert([{ code: p[0], tariff_type: p[1], days: parseInt(p[2]), max_uses: parseInt(p[3]), used_count: 0 }]);
+    if (!p || p.length < 5) return ctx.reply('Формат: /add_promo КОД | both | ДНИ | КОЛ_ВО | РУБЛИ');
+    await supabase.from('promocodes').insert([{ 
+        code: p[0], tariff_type: p[1], days: parseInt(p[2]), max_uses: parseInt(p[3]), bonus_rub: parseInt(p[4]), used_count: 0 
+    }]);
     ctx.reply(`✅ Промокод ${p[0]} создан!`);
 });
 
@@ -330,10 +406,33 @@ bot.action('admin_servers_list', async (ctx) => {
 });
 
 bot.action('global_msg', (ctx) => { userStates[ctx.from.id] = { action: 'msg_all' }; ctx.reply('Введите текст рассылки:'); });
-bot.hears('💎 Покупка', (ctx) => ctx.reply('Для покупки: @aure_ember'));
 
+// --- ВЕБХУК VERCEL И FREEKASSA ---
 module.exports = async (req, res) => {
-    try { if (req.method === 'POST') await bot.handleUpdate(req.body); } 
+    try { 
+        if (req.method === 'POST') {
+            // Проверка вебхука от FreeKassa об успешной оплате
+            if (req.body.MERCHANT_ORDER_ID && req.body.AMOUNT) {
+                const orderIdParts = req.body.MERCHANT_ORDER_ID.split('_');
+                const tg_chat_id = orderIdParts[1]; // Достаем ID юзера из pay_{userId}_{timestamp}
+                const amount = parseFloat(req.body.AMOUNT);
+                
+                const { data: user } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', tg_chat_id).single();
+                if (user) {
+                    await supabase.from('vpn_subs').update({ balance: (user.balance || 0) + amount }).eq('tg_chat_id', tg_chat_id);
+                    // Опционально можно отправить юзеру сообщение об успешном пополнении:
+                    try { await bot.telegram.sendMessage(tg_chat_id, `✅ Ваш баланс успешно пополнен на ${amount}₽!`); } catch(e){}
+                }
+                // FreeKassa требует в ответ слово YES
+                return res.status(200).send('YES');
+            }
+
+            // Иначе обрабатываем обычный апдейт телеграма
+            await bot.handleUpdate(req.body); 
+        } 
+    } 
     catch (e) { console.error('Error:', e); } 
-    finally { res.status(200).send('OK'); }
+    finally { 
+        if (!res.headersSent) res.status(200).send('OK'); 
+    }
 };
