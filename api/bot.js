@@ -1,16 +1,12 @@
 const { Telegraf, Markup } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
-const crypto = require('crypto'); // Добавили для подписи FreeKassa
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
 
 const ADMINS = [1192691079, 7761584076, 6443614614];
-const userStates = {}; 
-
-// --- НАСТРОЙКИ FREEKASSA ---
-const FK_ID = 'ТВОЙ_ID_МАГАЗИНА'; // Замени на свой ID
-const FK_KEY = 'ТВОЙ_СЕКРЕТНЫЙ_КЛЮЧ_1'; // Замени на секретный ключ №1
+const userStates = {};
+const TELEGRAM_ADMIN = '@aure_ember'; // ← ТВОЙ TELEGRAM (для пополнений)
 
 const TARIFF_MAP = {
     'both': 'Обход и Впн',
@@ -55,9 +51,13 @@ bot.start(async (ctx) => {
     
     if (!exists) {
         await supabase.from('vpn_subs').insert([{
-            internal_name: username, tg_chat_id: userId, tariff_type: 'none',
-            expires_at: '2000-01-01', profile_title: 'Psychosis VPN | Free',
-            test_used: false, balance: 0 // Добавили баланс 0 при старте
+            internal_name: username, 
+            tg_chat_id: userId, 
+            tariff_type: 'none',
+            expires_at: '2000-01-01', 
+            profile_title: 'Psychosis VPN | Free',
+            test_used: false, 
+            balance: 0
         }]);
     } else {
         await supabase.from('vpn_subs').update({ internal_name: username }).eq('tg_chat_id', userId);
@@ -77,8 +77,6 @@ bot.hears('👤 Профиль', async (ctx) => {
     const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n💰 Баланс: <b>${s?.balance || 0}₽</b>\n🕗 До: <b>${isExpired ? '-' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${isExpired ? 'Нету' : (TARIFF_MAP[s.tariff_type] || 'Нету')}</b>\n\n🔗 <code>${subUrl}</code>`;
     
     const inlineButtons = [];
-    
-    // Кнопка пополнения
     inlineButtons.push([Markup.button.callback('💳 Пополнить баланс', 'topup_init')]);
 
     if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
@@ -90,14 +88,48 @@ bot.hears('👤 Профиль', async (ctx) => {
     await ctx.replyWithHTML(report, Markup.inlineKeyboard(inlineButtons));
 });
 
-// --- ЛОГИКА ПОПОЛНЕНИЯ FREEKASSA ---
-bot.action('topup_init', (ctx) => {
-    userStates[ctx.from.id] = { action: 'wait_amount' };
-    ctx.reply('Введите сумму пополнения в рублях (например, 150):');
+// --- ПОПОЛНЕНИЕ БАЛАНСА (ПРОСТОЙ СПОСОБ) ---
+bot.action('topup_init', async (ctx) => {
     ctx.answerCbQuery();
+    const adminUsername = TELEGRAM_ADMIN.replace('@', '');
+    ctx.replyWithHTML(
+        `💳 <b>Пополнение баланса</b>\n\n` +
+        `Напиши в личные сообщения:\n` +
+        `<code>${TELEGRAM_ADMIN}</code>\n\n` +
+        `Укажи сумму пополнения, и мы добавим деньги на твой баланс! 💰`,
+        Markup.inlineKeyboard([
+            [Markup.button.url('💬 Написать в Telegram', `https://t.me/${adminUsername}`)],
+            [Markup.button.callback('⬅️ Назад', 'back_to_profile')]
+        ])
+    );
 });
 
-// ОБРАБОТКА НАЖАТИЯ КНОПКИ ТЕСТА
+bot.action('back_to_profile', async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
+    
+    const today = new Date().toISOString().split('T')[0];
+    const isExpired = !s || s.expires_at === '2000-01-01' || s.expires_at < today;
+    const subUrl = `https://psychosisvpn.vercel.app/api/get_sub?id=${s?.id}`;
+    
+    const report = `👤 Профиль: <b>${s?.internal_name || ctx.from.first_name}</b>\n💰 Баланс: <b>${s?.balance || 0}₽</b>\n🕗 До: <b>${isExpired ? '-' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${isExpired ? 'Нету' : (TARIFF_MAP[s.tariff_type] || 'Нету')}</b>\n\n🔗 <code>${subUrl}</code>`;
+    
+    const inlineButtons = [];
+    inlineButtons.push([Markup.button.callback('💳 Пополнить баланс', 'topup_init')]);
+
+    if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
+        inlineButtons.push([Markup.button.callback('🎁 Взять тест-период (5 дн.)', 'activate_test_profile')]);
+    }
+
+    inlineButtons.push([Markup.button.callback('🎟 Ввести промокод', 'enter_promo_inline')]);
+
+    await ctx.editMessageText(report, { 
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard(inlineButtons)
+    });
+});
+
+// --- АКТИВАЦИЯ ТЕСТА ---
 bot.action('activate_test_profile', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: user } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
@@ -141,6 +173,7 @@ bot.action('enter_promo_inline', (ctx) => {
 // --- ПОКУПКА ---
 bot.hears('💎 Покупка', async (ctx) => {
     const buttons = PRICES.map((p, i) => [Markup.button.callback(p.label, `buy_pkg_${i}`)]);
+    buttons.push([Markup.button.callback('💳 Пополнить баланс', 'topup_init')]);
     ctx.replyWithHTML('<b>Выберите период подписки:</b>\n<i>Тариф: Обход и Впн</i>', Markup.inlineKeyboard(buttons));
 });
 
@@ -150,7 +183,17 @@ bot.action(/^buy_pkg_(\d+)$/, async (ctx) => {
     const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
 
     if ((s.balance || 0) < pkg.price) {
-        return ctx.answerCbQuery(`❌ Недостаточно средств! Ваш баланс: ${s.balance || 0}₽`, { show_alert: true });
+        ctx.answerCbQuery(`❌ Недостаточно средств! Ваш баланс: ${s.balance || 0}₽`, { show_alert: true });
+        const adminUsername = TELEGRAM_ADMIN.replace('@', '');
+        return ctx.reply(
+            `💳 <b>Пополнение баланса</b>\n\n` +
+            `Нужно ещё: <b>${pkg.price - (s.balance || 0)}₽</b>\n\n` +
+            `Напиши в личные сообщения:\n` +
+            `<code>${TELEGRAM_ADMIN}</code>`,
+            Markup.inlineKeyboard([
+                [Markup.button.url('💬 Написать в Telegram', `https://t.me/${adminUsername}`)]
+            ])
+        );
     }
 
     const newDate = addDaysToDate(s.expires_at, pkg.days);
@@ -200,7 +243,6 @@ bot.action(/^manage_user_(.+)$/, async (ctx) => {
     ctx.editMessageText(`<b>Юзер:</b> ${u.internal_name}\n<b>До:</b> ${formatDate(u.expires_at)}\n<b>Баланс:</b> ${u.balance || 0}₽`, { parse_mode: 'HTML', ...kb });
 });
 
-// НОВАЯ ЛОГИКА: Написать юзеру
 bot.action(/^msg_user_(.+)$/, async (ctx) => {
     const uid = ctx.match[1];
     userStates[ctx.from.id] = { action: 'msg_single_user', targetId: uid };
@@ -208,7 +250,6 @@ bot.action(/^msg_user_(.+)$/, async (ctx) => {
     ctx.answerCbQuery();
 });
 
-// НОВАЯ ЛОГИКА: Аннулировать подписку
 bot.action(/^del_sub_final_(.+)$/, async (ctx) => {
     const uid = ctx.match[1];
     await supabase.from('vpn_subs').update({ 
@@ -298,23 +339,7 @@ bot.on('text', async (ctx, next) => {
     const input = ctx.message.text.trim();
 
     if (state) {
-        // Логика пополнения баланса
-        if (state.action === 'wait_amount') {
-            const amount = parseInt(input);
-            if (isNaN(amount) || amount < 10) return ctx.reply('Минимальная сумма — 10₽. Введите число:');
-            
-            const orderId = `pay_${userId}_${Date.now()}`;
-            // Формируем подпись для FreeKassa
-            const sign = crypto.createHash('md5').update(`${FK_ID}:${amount}:${FK_KEY}:RUB:${orderId}`).digest('hex');
-            const url = `https://pay.freekassa.ru/?m=${FK_ID}&oa=${amount}&o=${orderId}&s=${sign}&currency=RUB`;
-            
-            ctx.reply(`Счет на ${amount}₽ сформирован!`, Markup.inlineKeyboard([
-                [Markup.button.url('💳 Оплатить через FreeKassa', url)]
-            ]));
-            delete userStates[userId];
-            return;
-        }
-        else if (state.action === 'add_days_manual') {
+        if (state.action === 'add_days_manual') {
             const { data: s } = await supabase.from('vpn_subs').select('expires_at').eq('id', state.targetId).single();
             const newDate = addDaysToDate(s.expires_at, input);
             await supabase.from('vpn_subs').update({ expires_at: newDate, tariff_type: state.tariff, profile_title: 'Psychosis VPN | Premium' }).eq('id', state.targetId);
@@ -339,7 +364,7 @@ bot.on('text', async (ctx, next) => {
                 try { 
                     await bot.telegram.sendMessage(u.tg_chat_id, `📢 Рассылка:\n\n${input}`); 
                     successCount++;
-                } catch(e){} 
+                } catch(e){}  
             }
             ctx.reply(`✅ Рассылка завершена. Доставлено: ${successCount}`);
         }
@@ -354,12 +379,13 @@ bot.on('text', async (ctx, next) => {
                 }
             }
         }
-        delete userStates[userId]; return;
+        delete userStates[userId];
+        return;
     }
 
     if (input === '🎟 Промокод') return ctx.reply('Введите ваш промокод:');
 
-    // ЛОГИКА АКТИВАЦИИ ПРОМОКОДА
+    // АКТИВАЦИЯ ПРОМОКОДА
     const { data: promo } = await supabase.from('promocodes').select('*').eq('code', input).maybeSingle();
     if (promo) {
         const { data: sub } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId.toString()).maybeSingle();
@@ -368,7 +394,6 @@ bot.on('text', async (ctx, next) => {
         const { data: used } = await supabase.from('promo_activations').select('id').eq('user_id', sub.id).eq('promo_id', promo.id).maybeSingle();
         if (used) return ctx.reply('❌ Вы уже вводили этот код.');
 
-        // Проверяем, дает ли промокод рубли или дни
         if (promo.bonus_rub && promo.bonus_rub > 0) {
             await supabase.from('vpn_subs').update({ balance: (sub.balance || 0) + promo.bonus_rub }).eq('id', sub.id);
             ctx.replyWithHTML(`✅ Промокод активирован!\nНа ваш баланс зачислено: <b>${promo.bonus_rub}₽</b>`);
@@ -386,14 +411,18 @@ bot.on('text', async (ctx, next) => {
     return next();
 });
 
-// --- КОМАНДЫ И СЕРВЕРА ---
-// Обновили команду создания промокода, чтобы можно было добавлять рубли
+// --- КОМАНДЫ ---
 bot.command('add_promo', async (ctx) => {
     if (!ADMINS.includes(ctx.from.id)) return;
     const p = ctx.message.text.split('/add_promo ')[1]?.split('|').map(x => x.trim());
-    if (!p || p.length < 5) return ctx.reply('Формат: /add_promo КОД | both | ДНИ | КОЛ_ВО | РУБЛИ');
+    if (!p || p.length < 5) return ctx.reply('Формат: /add_promo КОД | ТАРИФ | ДНИ | КОЛ_ВО | РУБЛИ');
     await supabase.from('promocodes').insert([{ 
-        code: p[0], tariff_type: p[1], days: parseInt(p[2]), max_uses: parseInt(p[3]), bonus_rub: parseInt(p[4]), used_count: 0 
+        code: p[0], 
+        tariff_type: p[1], 
+        days: parseInt(p[2]), 
+        max_uses: parseInt(p[3]), 
+        bonus_rub: parseInt(p[4]), 
+        used_count: 0 
     }]);
     ctx.reply(`✅ Промокод ${p[0]} создан!`);
 });
@@ -405,34 +434,24 @@ bot.action('admin_servers_list', async (ctx) => {
     ctx.editMessageText('<b>Сервера:</b>', { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action('global_msg', (ctx) => { userStates[ctx.from.id] = { action: 'msg_all' }; ctx.reply('Введите текст рассылки:'); });
+bot.action('global_msg', (ctx) => { 
+    userStates[ctx.from.id] = { action: 'msg_all' }; 
+    ctx.reply('Введите текст рассылки:'); 
+    ctx.answerCbQuery();
+});
 
-// --- ВЕБХУК VERCEL И FREEKASSA ---
+// --- ВЕБХУК VERCEL (ТОЛЬКО TELEGRAM) ---
 module.exports = async (req, res) => {
-    try { 
+    try {
         if (req.method === 'POST') {
-            // Проверка вебхука от FreeKassa об успешной оплате
-            if (req.body.MERCHANT_ORDER_ID && req.body.AMOUNT) {
-                const orderIdParts = req.body.MERCHANT_ORDER_ID.split('_');
-                const tg_chat_id = orderIdParts[1]; // Достаем ID юзера из pay_{userId}_{timestamp}
-                const amount = parseFloat(req.body.AMOUNT);
-                
-                const { data: user } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', tg_chat_id).single();
-                if (user) {
-                    await supabase.from('vpn_subs').update({ balance: (user.balance || 0) + amount }).eq('tg_chat_id', tg_chat_id);
-                    // Опционально можно отправить юзеру сообщение об успешном пополнении:
-                    try { await bot.telegram.sendMessage(tg_chat_id, `✅ Ваш баланс успешно пополнен на ${amount}₽!`); } catch(e){}
-                }
-                // FreeKassa требует в ответ слово YES
-                return res.status(200).send('YES');
-            }
-
-            // Иначе обрабатываем обычный апдейт телеграма
+            // Обрабатываем только обновления от Telegram
             await bot.handleUpdate(req.body); 
         } 
     } 
-    catch (e) { console.error('Error:', e); } 
+    catch (e) { 
+        console.error('Error:', e); 
+    } 
     finally { 
-        if (!res.headersSent) res.status(200).send('OK'); 
+        res.status(200).send('OK'); 
     }
 };
