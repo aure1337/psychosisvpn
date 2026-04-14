@@ -1,8 +1,14 @@
 const { Telegraf, Markup } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
+const crypto = require('crypto');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.S_URL, process.env.S_KEY);
+
+// --- НАСТРОЙКИ FREEKASSA ---
+const FK_ID = '72200';
+const FK_KEY1 = 'D4)_tQ4H*N=[eNt'; 
+const FK_KEY2 = '1yggQ([ReO$VVWl';
 
 const ADMINS = [1192691079, 7761584076, 6443614614];
 const userStates = {};
@@ -37,6 +43,11 @@ function formatDate(dateStr) {
     return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
+function generateFkLink(amount, orderId) {
+    const sign = crypto.createHash('md5').update(`${FK_ID}:${amount}:${FK_KEY1}:RUB:${orderId}`).digest('hex');
+    return `https://pay.freekassa.ru/?m=${FK_ID}&oa=${amount}&o=${orderId}&s=${sign}&currency=RUB`;
+}
+
 async function getMainMenu(ctx) {
     const buttons = [['👤 Профиль', '💎 Покупка'], ['🎟 Промокод']];
     if (ADMINS.includes(ctx.from.id)) buttons.push(['🛠 Админ-панель']);
@@ -63,7 +74,6 @@ async function processPromoCode(ctx, userId, code) {
     if (!sub) return ctx.reply('❌ Сначала запустите бота через /start');
 
     if (promo.used_count >= promo.max_uses) {
-        // Удаляем промокод, если он уже использован
         await supabase.from('promo_activations').delete().eq('promo_id', promo.id);
         await supabase.from('promocodes').delete().eq('id', promo.id);
         return ctx.reply('❌ Этот код уже был использован максимальное количество раз.');
@@ -122,7 +132,7 @@ bot.hears('👤 Профиль', async (ctx) => {
     
     const report = `👤 <b>${s?.internal_name || ctx.from.first_name}</b>\n💰 Баланс: <b>${s?.balance || 0}₽</b>\n🕗 До: <b>${isExpired ? '—' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${TARIFF_MAP[s?.tariff_type] || 'Не активна'}</b>\n\n🔗 <code>${subUrl}</code>`;
     
-    const inlineButtons = [[Markup.button.callback('💳 Пополнить баланс', 'topup_init')]];
+    const inlineButtons = [[Markup.button.callback('💳 Пополнить баланс', 'topup_fk')]];
     if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
         inlineButtons.push([Markup.button.callback('🎁 Тест-период (5 дн.)', 'activate_test_profile')]);
     }
@@ -130,10 +140,11 @@ bot.hears('👤 Профиль', async (ctx) => {
     await ctx.replyWithHTML(report, Markup.inlineKeyboard(inlineButtons));
 });
 
-bot.action('topup_init', async (ctx) => {
+// --- ОПЛАТА ЧЕРЕЗ FREEKASSA (ПОПОЛНЕНИЕ) ---
+bot.action('topup_fk', (ctx) => {
+    userStates[ctx.from.id] = { action: 'topup_amount' };
+    ctx.reply('Введите сумму пополнения (в рублях, минимум 10₽):');
     ctx.answerCbQuery();
-    const adminUsername = TELEGRAM_ADMIN.replace('@', '');
-    ctx.replyWithHTML(`💳 <b>Пополнение баланса</b>\n\nНапиши сумму админу:\n<code>${TELEGRAM_ADMIN}</code>`, Markup.inlineKeyboard([[Markup.button.url('💬 Написать', `https://t.me/${adminUsername}`)]]));
 });
 
 bot.action('activate_test_profile', async (ctx) => {
@@ -154,17 +165,18 @@ bot.action('enter_promo_inline', (ctx) => {
 // --- ПОКУПКА ---
 bot.hears('💎 Покупка', async (ctx) => {
     const buttons = PRICES.map((p, i) => [Markup.button.callback(p.label, `buy_select_${i}`)]);
-    buttons.push([Markup.button.callback('💳 Пополнить баланс', 'topup_init')]);
     ctx.replyWithHTML('<b>💎 Выберите период подписки</b>\n<i>Тариф: Обход + Впн</i>', Markup.inlineKeyboard(buttons));
 });
 
 bot.action(/^buy_select_(\d+)$/, async (ctx) => {
     const idx = ctx.match[1];
-    ctx.editMessageText(`<b>${PRICES[idx].label}</b>\n\nЧто сделать?`, {
+    const pkg = PRICES[idx];
+    ctx.editMessageText(`<b>${pkg.label}</b>\n\nВыберите способ оплаты:`, {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
-            [Markup.button.callback('✅ Купить себе', `buy_confirm_${idx}`)],
-            [Markup.button.callback('🎁 Подарок', `buy_gift_${idx}`)],
+            [Markup.button.callback('💰 С баланса бота', `buy_confirm_${idx}`)],
+            [Markup.button.callback('💳 Картой / СБП (FreeKassa)', `buy_fk_${idx}`)],
+            [Markup.button.callback('🎁 В подарок', `buy_gift_${idx}`)],
             [Markup.button.callback('⬅️ Назад', 'buy_menu_back')]
         ])
     });
@@ -173,6 +185,18 @@ bot.action(/^buy_select_(\d+)$/, async (ctx) => {
 bot.action('buy_menu_back', async (ctx) => {
     const buttons = PRICES.map((p, i) => [Markup.button.callback(p.label, `buy_select_${i}`)]);
     ctx.editMessageText('<b>💎 Выберите период подписки</b>\n<i>Тариф: Обход + Впн</i>', { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+});
+
+// Прямая оплата через FreeKassa
+bot.action(/^buy_fk_(\d+)$/, async (ctx) => {
+    const idx = ctx.match[1];
+    const pkg = PRICES[idx];
+    const orderId = `SUB_${ctx.from.id}_${idx}_${Date.now()}`;
+    const link = generateFkLink(pkg.price, orderId);
+    
+    ctx.replyWithHTML(`🚀 <b>Ссылка на оплату готова!</b>\nСумма: ${pkg.price}₽\n\nПосле оплаты подписка начислится автоматически в течение 5 минут.`, 
+        Markup.inlineKeyboard([[Markup.button.url('💳 Перейти к оплате', link)]]));
+    ctx.answerCbQuery();
 });
 
 bot.action(/^buy_confirm_(\d+)$/, async (ctx) => {
@@ -345,6 +369,21 @@ bot.on('text', async (ctx, next) => {
     const input = ctx.message.text.trim();
 
     if (state) {
+        // --- ПОПОЛНЕНИЕ ЧЕРЕЗ FREEKASSA ---
+        if (state.action === 'topup_amount') {
+            const amount = parseInt(input);
+            if (isNaN(amount) || amount < 10) {
+                delete userStates[userId];
+                return ctx.reply('❌ Минимальная сумма — 10₽. Попробуйте снова.');
+            }
+            const orderId = `BILL_${userId}_${Date.now()}`;
+            const link = generateFkLink(amount, orderId);
+            ctx.replyWithHTML(`💳 <b>Ссылка на пополнение:</b>\n\nСумма: ${amount}₽\n\nПосле оплаты баланс пополнится автоматически.`, 
+                Markup.inlineKeyboard([[Markup.button.url('💳 Перейти к оплате', link)]]));
+            delete userStates[userId];
+            return;
+        }
+
         // --- ПРОМОКОДЫ (Пошагово) ---
         if (state.action === 'adm_promo_step1') {
             state.promo_name = input.toUpperCase().substring(0, 30);
@@ -395,6 +434,7 @@ bot.on('text', async (ctx, next) => {
             const { data: u } = await supabase.from('vpn_subs').select('balance').eq('id', state.targetId).single();
             await supabase.from('vpn_subs').update({ balance: (u.balance || 0) + amount }).eq('id', state.targetId);
             ctx.reply(`✅ Добавлено ${amount}₽`);
+            delete userStates[userId];
         }
         else if (state.action === 'adm_set_days') {
             const days = parseInt(input);
@@ -402,6 +442,7 @@ bot.on('text', async (ctx, next) => {
             const newDate = addDaysToDate('2000-01-01', days);
             await supabase.from('vpn_subs').update({ expires_at: newDate, tariff_type: state.tariff, profile_title: 'Psychosis VPN | Premium' }).eq('id', state.targetId);
             ctx.reply(`✅ Подписка установлена: ${TARIFF_MAP[state.tariff]} до ${formatDate(newDate)}`);
+            delete userStates[userId];
         }
         else if (state.action === 'msg_single_user') {
             const { data: u } = await supabase.from('vpn_subs').select('tg_chat_id').eq('id', state.targetId).single();
@@ -411,6 +452,7 @@ bot.on('text', async (ctx, next) => {
             } catch(e) { 
                 ctx.reply('❌ Ошибка отправки.');
             }
+            delete userStates[userId];
         }
         else if (state.action === 'msg_all') {
             const { data: users } = await supabase.from('vpn_subs').select('tg_chat_id');
@@ -422,9 +464,9 @@ bot.on('text', async (ctx, next) => {
                 } catch(e){} 
             }
             ctx.reply(`✅ Рассылка: ${count} доставлено`);
+            delete userStates[userId];
         }
 
-        delete userStates[userId];
         return;
     }
 
@@ -463,8 +505,47 @@ bot.command('setbalance', async (ctx) => {
     ctx.reply(`✅ Баланс юзера ${userId} установлен в ${amount}₽`);
 });
 
-// --- VERCEL ---
+// --- VERCEL WEBHOOK + ОБРАБОТКА ОПЛАТ FREEKASSA ---
 module.exports = async (req, res) => {
+    // 1. Обработка уведомления от FreeKassa
+    if (req.method === 'POST' && req.query.fk_webhook === '1') {
+        const { MERCHANT_ID, AMOUNT, MERCHANT_ORDER_ID, SIGN } = req.body;
+        
+        // Проверка подписи (Key 2)
+        const checkSign = crypto.createHash('md5').update(`${FK_ID}:${AMOUNT}:${FK_KEY2}:${MERCHANT_ORDER_ID}`).digest('hex');
+        
+        if (SIGN === checkSign) {
+            const orderParts = MERCHANT_ORDER_ID.split('_'); // BILL_ID_TIME или SUB_ID_IDX_TIME
+            const tgId = orderParts[1];
+
+            if (orderParts[0] === 'BILL') {
+                // Пополнение баланса
+                const { data: u } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', tgId).single();
+                if (u) {
+                    await supabase.from('vpn_subs').update({ balance: (u.balance || 0) + parseFloat(AMOUNT) }).eq('tg_chat_id', tgId);
+                    await bot.telegram.sendMessage(tgId, `💰 <b>Баланс пополнен на ${AMOUNT}₽!</b>\n\nСпасибо за оплату!`, { parse_mode: 'HTML' });
+                }
+            } 
+            else if (orderParts[0] === 'SUB') {
+                // Прямая покупка подписки
+                const pkg = PRICES[orderParts[2]];
+                const { data: u } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', tgId).single();
+                if (u) {
+                    const newDate = addDaysToDate(u.expires_at, pkg.days);
+                    await supabase.from('vpn_subs').update({ 
+                        expires_at: newDate, 
+                        tariff_type: 'both',
+                        profile_title: 'Psychosis VPN | Premium'
+                    }).eq('tg_chat_id', tgId);
+                    await bot.telegram.sendMessage(tgId, `💎 <b>Оплата принята!</b>\n\nПодписка продлена до: ${formatDate(newDate)}\nСпасибо за покупку!`, { parse_mode: 'HTML' });
+                }
+            }
+            return res.status(200).send('YES');
+        }
+        return res.status(400).send('Wrong sign');
+    }
+
+    // 2. Обычный вебхук телеграма
     try { 
         if (req.method === 'POST') await bot.handleUpdate(req.body); 
     } 
