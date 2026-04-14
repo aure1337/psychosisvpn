@@ -507,43 +507,76 @@ bot.command('setbalance', async (ctx) => {
 
 // --- VERCEL WEBHOOK + ОБРАБОТКА ОПЛАТ FREEKASSA ---
 module.exports = async (req, res) => {
-    // 1. Обработка уведомления от FreeKassa
-    if (req.method === 'POST' && req.query.fk_webhook === '1') {
-        const { MERCHANT_ID, AMOUNT, MERCHANT_ORDER_ID, SIGN } = req.body;
-        
-        // Проверка подписи (Key 2)
+    // Собираем данные: FreeKassa может слать их как в body (POST), так и в query (GET)
+    const fkData = { ...req.query, ...(req.body || {}) };
+
+    // 1. ОБРАБОТКА УВЕДОМЛЕНИЙ ОТ FREEKASSA
+    if (fkData.fk_webhook === '1' || fkData.MERCHANT_ORDER_ID) {
+        const { MERCHANT_ID, AMOUNT, MERCHANT_ORDER_ID, SIGN } = fkData;
+
+        // Если параметров нет (юзер просто перешел по ссылке в браузере)
+        if (!AMOUNT || !MERCHANT_ORDER_ID || !SIGN) {
+            return res.status(200).send('Если вы оплатили подписку, пожалуйста, вернитесь в Telegram-бота.');
+        }
+
+        // Проверка подписи (используем Key 2 для уведомлений)
         const checkSign = crypto.createHash('md5').update(`${FK_ID}:${AMOUNT}:${FK_KEY2}:${MERCHANT_ORDER_ID}`).digest('hex');
-        
-        if (SIGN === checkSign) {
+
+        // Сравниваем подписи (в нижнем регистре для надежности)
+        if (SIGN.toLowerCase() === checkSign.toLowerCase()) {
             const orderParts = MERCHANT_ORDER_ID.split('_'); // BILL_ID_TIME или SUB_ID_IDX_TIME
             const tgId = orderParts[1];
 
-            if (orderParts[0] === 'BILL') {
-                // Пополнение баланса
-                const { data: u } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', tgId).single();
-                if (u) {
-                    await supabase.from('vpn_subs').update({ balance: (u.balance || 0) + parseFloat(AMOUNT) }).eq('tg_chat_id', tgId);
-                    await bot.telegram.sendMessage(tgId, `💰 <b>Баланс пополнен на ${AMOUNT}₽!</b>\n\nСпасибо за оплату!`, { parse_mode: 'HTML' });
+            try {
+                if (orderParts[0] === 'BILL') {
+                    // Пополнение баланса
+                    const { data: u } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', tgId).maybeSingle();
+                    if (u) {
+                        await supabase.from('vpn_subs').update({ balance: (u.balance || 0) + parseFloat(AMOUNT) }).eq('tg_chat_id', tgId);
+                        await bot.telegram.sendMessage(tgId, `💰 <b>Баланс пополнен на ${AMOUNT}₽!</b>\n\nСпасибо за оплату!`, { parse_mode: 'HTML' });
+                    }
+                } 
+                else if (orderParts[0] === 'SUB') {
+                    // Прямая покупка
+                    const pkg = PRICES[orderParts[2]];
+                    const { data: u } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', tgId).maybeSingle();
+                    if (u) {
+                        const newDate = addDaysToDate(u.expires_at, pkg.days);
+                        await supabase.from('vpn_subs').update({ 
+                            expires_at: newDate, 
+                            tariff_type: 'both',
+                            profile_title: 'Psychosis VPN | Premium'
+                        }).eq('tg_chat_id', tgId);
+                        await bot.telegram.sendMessage(tgId, `💎 <b>Оплата принята!</b>\n\nПодписка продлена до: ${formatDate(newDate)}\nСпасибо за покупку!`, { parse_mode: 'HTML' });
+                    }
                 }
-            } 
-            else if (orderParts[0] === 'SUB') {
-                // Прямая покупка подписки
-                const pkg = PRICES[orderParts[2]];
-                const { data: u } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', tgId).single();
-                if (u) {
-                    const newDate = addDaysToDate(u.expires_at, pkg.days);
-                    await supabase.from('vpn_subs').update({ 
-                        expires_at: newDate, 
-                        tariff_type: 'both',
-                        profile_title: 'Psychosis VPN | Premium'
-                    }).eq('tg_chat_id', tgId);
-                    await bot.telegram.sendMessage(tgId, `💎 <b>Оплата принята!</b>\n\nПодписка продлена до: ${formatDate(newDate)}\nСпасибо за покупку!`, { parse_mode: 'HTML' });
-                }
+                // FreeKassa требует в ответ ровно слово "YES" при успешной обработке
+                return res.status(200).send('YES'); 
+            } catch (error) {
+                console.error('Database Error in Webhook:', error);
+                return res.status(500).send('Internal Server Error');
             }
-            return res.status(200).send('YES');
+        } else {
+            console.error(`Wrong Freekassa Sign. Expected: ${checkSign}, Got: ${SIGN}`);
+            return res.status(400).send('Wrong sign');
         }
-        return res.status(400).send('Wrong sign');
     }
+
+    // 2. ОБРАБОТКА ВЕБХУКОВ ОТ TELEGRAM
+    try {
+        // Убеждаемся, что это реально запрос от Телеграма (у них есть update_id)
+        if (req.method === 'POST' && req.body && req.body.update_id) {
+            await bot.handleUpdate(req.body);
+            return res.status(200).send('OK');
+        }
+    } catch (e) {
+        console.error('Telegram Update Error:', e);
+        return res.status(500).send('Error');
+    }
+
+    // 3. ЗАГЛУШКА ДЛЯ ВСЕХ ОСТАЛЬНЫХ ЗАПРОСОВ
+    return res.status(200).send('Psychosis VPN Bot API is running.');
+};
 
     // 2. Обычный вебхук телеграма
     try { 
