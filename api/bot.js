@@ -13,6 +13,7 @@ const FK_KEY2 = '1yggQ([ReO$VVWl';
 const ADMINS = [1192691079, 7761584076, 6443614614];
 const userStates = {};
 const USERS_PER_PAGE = 10;
+const TELEGRAM_ADMIN = '@aure_ember';
 
 const TARIFF_MAP = {
     'both': 'Обход и Впн',
@@ -56,12 +57,36 @@ async function safeDelete(ctx, msgId = null) {
     } catch (e) {}
 }
 
-// --- БД: ЛОГИ ОПЛАТЫ ---
+// --- БД: ЛОГИ ОПЛАТЫ И ПЕРЕДАЧИ ДНЕЙ ---
 async function savePaymentMsg(orderId, chatId, msgId) {
     await supabase.from('payment_messages').insert([{ 
         order_id: orderId, 
         chat_id: chatId.toString(), 
         message_id: msgId 
+    }]);
+}
+
+// Проверка и запись передачи дней
+async function canShareDays(giverSubId, receiverSubId) {
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Проверяем, не дарил ли уже сегодня этому же человеку
+    const { data: existing } = await supabase.from('days_shares')
+        .select('id')
+        .eq('giver_sub_id', giverSubId)
+        .eq('receiver_sub_id', receiverSubId)
+        .gte('created_at', today)
+        .maybeSingle();
+        
+    return !existing;
+}
+
+async function recordDaysShare(giverSubId, receiverSubId, days) {
+    await supabase.from('days_shares').insert([{
+        giver_sub_id: giverSubId,
+        receiver_sub_id: receiverSubId,
+        days: days,
+        created_at: new Date().toISOString()
     }]);
 }
 
@@ -76,6 +101,12 @@ async function renderProfile(ctx, isEdit = false) {
     const report = `👤 <b>${s?.internal_name || ctx.from.first_name}</b>\n💰 Баланс: <b>${s?.balance || 0}₽</b>\n🕗 До: <b>${isExpired ? '—' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${TARIFF_MAP[s?.tariff_type] || 'Не активна'}</b>\n\n🔗 <code>${subUrl}</code>`;
     
     const inlineButtons = [[Markup.button.callback('💳 Пополнить', 'topup_menu')]];
+    
+    // Кнопка "Поделиться днями" только если есть активная подписка не из теста
+    if (!isExpired && s?.tariff_type !== 'none' && !s?.profile_title?.includes('TEST')) {
+        inlineButtons.push([Markup.button.callback('🔗 Поделиться днями', 'create_share_link')]);
+    }
+    
     if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
         inlineButtons.push([Markup.button.callback('🎁 Тест-период (5 дн.)', 'activate_test_profile')]);
     }
@@ -205,7 +236,65 @@ bot.start(async (ctx) => {
     await ctx.reply('🚀 Psychosis VPN запущен!\n\n⚡ Быстрый VPN для России и обхода блокировок', 
         Markup.keyboard(buttons).resize());
 
-    if (ctx.payload) {
+    // ========== ОБРАБОТКА SHARE ==========
+    if (ctx.payload && ctx.payload.startsWith('share_')) {
+        const targetSubId = ctx.payload.replace('share_', '');
+        
+        const { data: targetSub } = await supabase.from('vpn_subs')
+            .select('internal_name, tg_chat_id, id')
+            .eq('id', targetSubId)
+            .maybeSingle();
+            
+        if (!targetSub) {
+            return ctx.reply('❌ Пользователь не найден');
+        }
+        
+        const { data: mySub } = await supabase.from('vpn_subs')
+            .select('id')
+            .eq('tg_chat_id', userId)
+            .single();
+            
+        if (mySub.id === targetSubId) {
+            return ctx.reply('❌ Нельзя подарить дни самому себе!');
+        }
+        
+        // Проверяем, не дарил ли уже сегодня
+        const canShare = await canShareDays(mySub.id, targetSubId);
+        if (!canShare) {
+            return ctx.reply(
+                `❌ Вы уже дарили дни этому пользователю сегодня!\n\n` +
+                `Повторно подарить дни можно будет завтра.`
+            );
+        }
+        
+        userStates[userId] = {
+            action: 'share_days',
+            targetSubId: targetSubId,
+            targetName: targetSub.internal_name,
+            targetChatId: targetSub.tg_chat_id,
+            mySubId: mySub.id
+        };
+        
+        // Инфо о функции с предупреждением
+        await ctx.reply(
+            `⚠️ <b>Внимание! Это тестовая функция.</b>\n` +
+            `При использовании могут возникнуть баги, пишите: ${TELEGRAM_ADMIN}\n\n` +
+            `🎁 <b>Подарить дни подписки</b>\n\n` +
+            `👤 Получатель: ${targetSub.internal_name}\n\n` +
+            `📋 <b>Правила:</b>\n` +
+            `• Можно подарить от 1 до 15 дней\n` +
+            `• Одному пользователю можно дарить раз в день\n` +
+            `• Дни списываются с вашей подписки\n` +
+            `• Нельзя дарить дни из тестового периода\n\n` +
+            `Введите количество дней, которое хотите подарить (1-15):`,
+            { 
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'cancel_state')]])
+            }
+        );
+    }
+    // ========== ОБЫЧНЫЕ ПРОМОКОДЫ ==========
+    else if (ctx.payload) {
         await processPromoCode(ctx, userId, ctx.payload);
     }
 });
@@ -224,6 +313,43 @@ bot.action('back_to_profile', async (ctx) => {
 bot.hears('👤 Профиль', async (ctx) => {
     await safeDelete(ctx);
     await renderProfile(ctx, false);
+});
+
+// ========== КНОПКА "ПОДЕЛИТЬСЯ ДНЯМИ" ==========
+bot.action('create_share_link', async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const { data: mySub } = await supabase.from('vpn_subs')
+        .select('id, expires_at, profile_title')
+        .eq('tg_chat_id', userId)
+        .single();
+        
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (mySub.expires_at === '2000-01-01' || mySub.expires_at < today) {
+        return ctx.answerCbQuery('❌ У вас нет активной подписки!', { show_alert: true });
+    }
+    
+    if (mySub.profile_title?.includes('TEST')) {
+        return ctx.answerCbQuery('❌ Нельзя делиться днями из тестового периода!', { show_alert: true });
+    }
+    
+    const botInfo = await ctx.telegram.getMe();
+    const shareLink = `https://t.me/${botInfo.username}?start=share_${mySub.id}`;
+    
+    await ctx.editMessageText(
+        `⚠️ <b>Внимание! Это тестовая функция.</b>\n` +
+        `При использовании могут возникнуть баги, пишите: ${TELEGRAM_ADMIN}\n\n` +
+        `🔗 <b>Ваша ссылка для получения дней подписки:</b>\n\n` +
+        `<code>${shareLink}</code>\n\n` +
+        `<i>Отправьте эту ссылку другу. Когда он перейдёт по ней, он сможет подарить вам от 1 до 15 дней своей подписки (раз в день).</i>`,
+        {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.url('📤 Поделиться ссылкой', `https://t.me/share/url?url=${encodeURIComponent(shareLink)}&text=${encodeURIComponent('🎁 Я собираю дни подписки! Перейди по ссылке и подари мне от 1 до 15 дней от своей подписки!')}`)],
+                [Markup.button.callback('👤 В профиль', 'back_to_profile')]
+            ])
+        }
+    );
 });
 
 // ========== НОВОЕ МЕНЮ ПОПОЛНЕНИЯ ==========
@@ -536,12 +662,12 @@ bot.action('admin_stats', async (ctx) => {
     );
 });
 
-// Создание подарков (Админ)
+// ========== УЛУЧШЕННОЕ СОЗДАНИЕ ПОДАРКОВ (АДМИН) ==========
 bot.action('admin_create_gift_menu', (ctx) => {
-    ctx.editMessageText('<b>Тип подарка:</b>', {
+    ctx.editMessageText('<b>🎁 Создание подарка</b>\n\n<i>Выберите тип подарка:</i>', {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
-            [Markup.button.callback('⏳ Дни подписки', 'adm_gift_type_days'), Markup.button.callback('💰 Рубли', 'adm_gift_type_rub')],
+            [Markup.button.callback('⏳ Дни подписки', 'adm_gift_type_days'), Markup.button.callback('💰 Рубли на баланс', 'adm_gift_type_rub')],
             [Markup.button.callback('⬅️ Назад', 'admin_menu_back')]
         ])
     });
@@ -549,12 +675,28 @@ bot.action('admin_create_gift_menu', (ctx) => {
 
 bot.action('adm_gift_type_days', (ctx) => { 
     userStates[ctx.from.id] = { action: 'admin_gift_days_create', msgId: ctx.callbackQuery.message.message_id }; 
-    ctx.editMessageText('Сколько дней подписки?', Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'admin_menu_back')]])); 
+    ctx.editMessageText(
+        '⏳ <b>Создание подарка (дни)</b>\n\n' +
+        'Введите количество дней подписки:\n\n' +
+        '<i>Будет создана ссылка-подарок, при активации которой пользователь получит указанное количество дней.</i>',
+        { 
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'admin_create_gift_menu')]])
+        }
+    ); 
 });
 
 bot.action('adm_gift_type_rub', (ctx) => { 
     userStates[ctx.from.id] = { action: 'admin_gift_rub_create', msgId: ctx.callbackQuery.message.message_id }; 
-    ctx.editMessageText('Сумма пополнения (₽)?', Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'admin_menu_back')]])); 
+    ctx.editMessageText(
+        '💰 <b>Создание подарка (рубли)</b>\n\n' +
+        'Введите сумму в рублях:\n\n' +
+        '<i>Будет создана ссылка-подарок, при активации которой пользователь получит указанную сумму на баланс.</i>',
+        { 
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'admin_create_gift_menu')]])
+        }
+    ); 
 });
 
 // ========== ПРОМОКОДЫ С РАБОЧИМ РЕДАКТИРОВАНИЕМ ==========
@@ -938,6 +1080,103 @@ bot.on('text', async (ctx, next) => {
             return await processPromoCode(ctx, userId, input, state.msgId);
         }
 
+        // ========== ПЕРЕДАЧА ДНЕЙ ПОДПИСКИ ==========
+        if (state.action === 'share_days') {
+            const daysToGive = parseInt(input);
+            const myUserId = ctx.from.id.toString();
+            
+            if (isNaN(daysToGive) || daysToGive < 1 || daysToGive > 15) {
+                return editPrompt(
+                    '❌ Введите число от 1 до 15:',
+                    [[Markup.button.callback('❌ Отмена', 'cancel_state')]]
+                );
+            }
+            
+            const { data: mySub } = await supabase.from('vpn_subs')
+                .select('*')
+                .eq('tg_chat_id', myUserId)
+                .single();
+                
+            const today = new Date().toISOString().split('T')[0];
+            const myExpiresAt = new Date(mySub.expires_at);
+            const daysLeft = Math.ceil((myExpiresAt - new Date(today)) / (1000 * 60 * 60 * 24));
+            
+            if (mySub.tariff_type === 'none' || mySub.expires_at === '2000-01-01' || mySub.expires_at < today) {
+                return editPrompt(
+                    '❌ У вас нет активной подписки!',
+                    [[Markup.button.callback('👤 В профиль', 'back_to_profile')]]
+                );
+            }
+            
+            if (mySub.profile_title?.includes('TEST')) {
+                return editPrompt(
+                    '❌ Нельзя дарить дни из тестового периода!',
+                    [[Markup.button.callback('👤 В профиль', 'back_to_profile')]]
+                );
+            }
+            
+            if (daysLeft <= daysToGive) {
+                return editPrompt(
+                    `❌ У вас осталось только ${daysLeft} дн. подписки!\nНельзя подарить больше, чем есть (останется минимум 1 день).`,
+                    [[Markup.button.callback('👤 В профиль', 'back_to_profile')]]
+                );
+            }
+            
+            // Проверяем, не дарил ли уже сегодня
+            const canShare = await canShareDays(mySub.id, state.targetSubId);
+            if (!canShare) {
+                return editPrompt(
+                    `❌ Вы уже дарили дни этому пользователю сегодня!\nПовторно подарить можно будет завтра.`,
+                    [[Markup.button.callback('👤 В профиль', 'back_to_profile')]]
+                );
+            }
+            
+            const { data: targetSub } = await supabase.from('vpn_subs')
+                .select('*')
+                .eq('id', state.targetSubId)
+                .single();
+            
+            // Вычитаем дни у дарителя
+            const newMyDate = new Date(mySub.expires_at);
+            newMyDate.setDate(newMyDate.getDate() - daysToGive);
+            
+            // Добавляем дни получателю
+            const newTargetDate = addDaysToDate(targetSub.expires_at, daysToGive);
+            
+            await supabase.from('vpn_subs')
+                .update({ expires_at: newMyDate.toISOString().split('T')[0] })
+                .eq('id', mySub.id);
+                
+            await supabase.from('vpn_subs')
+                .update({ 
+                    expires_at: newTargetDate,
+                    tariff_type: targetSub.tariff_type === 'none' ? 'both' : targetSub.tariff_type,
+                    profile_title: 'Psychosis VPN | Premium'
+                })
+                .eq('id', targetSub.id);
+            
+            // Записываем факт передачи
+            await recordDaysShare(mySub.id, targetSub.id, daysToGive);
+            
+            // Уведомляем обоих
+            await ctx.replyWithHTML(
+                `✅ <b>Вы успешно подарили ${daysToGive} дн. подписки!</b>\n\n` +
+                `👤 Получатель: ${state.targetName}\n` +
+                `📅 У вас осталось: ${formatDate(newMyDate.toISOString())}`
+            );
+            
+            await bot.telegram.sendMessage(
+                state.targetChatId,
+                `🎁 <b>Вам подарили ${daysToGive} дн. подписки!</b>\n\n` +
+                `👤 От: ${mySub.internal_name}\n` +
+                `📅 Ваша подписка продлена до: ${formatDate(newTargetDate)}`,
+                { parse_mode: 'HTML' }
+            );
+            
+            delete userStates[userId];
+            return;
+        }
+
         // --- ПОПОЛНЕНИЕ СВОЕГО БАЛАНСА ---
         if (state.action === 'topup_amount_self') {
             const amount = parseInt(input);
@@ -1169,31 +1408,66 @@ bot.on('text', async (ctx, next) => {
             return;
         }
 
-        // --- ПОДАРКИ ---
+        // ========== УЛУЧШЕННОЕ СОЗДАНИЕ ПОДАРКОВ (АДМИН) ==========
         if (state.action === 'admin_gift_days_create') {
-            const customName = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
             const days = parseInt(input);
+            if (isNaN(days) || days <= 0) {
+                return editPrompt('❌ Введите корректное число дней!', 
+                    [[Markup.button.callback('❌ Отмена', 'admin_create_gift_menu')]]);
+            }
+            
+            const customName = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
             await supabase.from('promocodes').insert([{ 
                 code: customName, days: days, max_uses: 1, bonus_rub: 0, tariff_type: 'both', used_count: 0 
             }]);
+            
             const botInfo = await ctx.telegram.getMe();
+            const giftLink = `https://t.me/${botInfo.username}?start=${customName}`;
+            const shareText = `🎁 Я дарю тебе подписку на ${days} дней в @${botInfo.username}! Жми скорее, активируй подписку!`;
+            
             await editPrompt(
-                `🎁 <b>Подарок (${days} дн.) создан!</b>\n\n<code>https://t.me/${botInfo.username}?start=${customName}</code>`, 
-                [[Markup.button.callback('⬅️ Назад', 'admin_create_gift_menu')]]
+                `✅ <b>Подарок успешно создан!</b>\n\n` +
+                `🎁 <b>Тип:</b> Дни подписки (${days} дн.)\n\n` +
+                `🔗 <b>Ссылка-подарок:</b>\n` +
+                `<code>${giftLink}</code>\n\n` +
+                `<i>Отправьте эту ссылку пользователю. При активации он получит ${days} дней подписки.</i>`,
+                [
+                    [Markup.button.url(`📤 Поделиться (${days} дн.)`, `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent(shareText)}`)],
+                    [Markup.button.callback('🎁 Создать ещё', 'admin_create_gift_menu')],
+                    [Markup.button.callback('⬅️ В админку', 'admin_menu_back')]
+                ]
             );
             delete userStates[userId];
             return;
         }
+        
         if (state.action === 'admin_gift_rub_create') {
-            const customName = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
             const rub = parseInt(input);
+            if (isNaN(rub) || rub <= 0) {
+                return editPrompt('❌ Введите корректную сумму!', 
+                    [[Markup.button.callback('❌ Отмена', 'admin_create_gift_menu')]]);
+            }
+            
+            const customName = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
             await supabase.from('promocodes').insert([{ 
                 code: customName, days: 0, max_uses: 1, bonus_rub: rub, tariff_type: 'none', used_count: 0 
             }]);
+            
             const botInfo = await ctx.telegram.getMe();
+            const giftLink = `https://t.me/${botInfo.username}?start=${customName}`;
+            const shareText = `🎁 Я дарю тебе ${rub}₽ на баланс в @${botInfo.username}! Жми скорее, активируй подарок!`;
+            
             await editPrompt(
-                `🎁 <b>Подарок (${rub}₽) создан!</b>\n\n<code>https://t.me/${botInfo.username}?start=${customName}</code>`, 
-                [[Markup.button.callback('⬅️ Назад', 'admin_create_gift_menu')]]
+                `✅ <b>Подарок успешно создан!</b>\n\n` +
+                `🎁 <b>Тип:</b> Рубли на баланс (${rub}₽)\n\n` +
+                `🔗 <b>Ссылка-подарок:</b>\n` +
+                `<code>${giftLink}</code>\n\n` +
+                `<i>Отправьте эту ссылку пользователю. При активации он получит ${rub}₽ на баланс.</i>`,
+                [
+                    [Markup.button.url(`📤 Поделиться (${rub}₽)`, `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent(shareText)}`)],
+                    [Markup.button.callback('🎁 Создать ещё', 'admin_create_gift_menu')],
+                    [Markup.button.callback('⬅️ В админку', 'admin_menu_back')]
+                ]
             );
             delete userStates[userId];
             return;
