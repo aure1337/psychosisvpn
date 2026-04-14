@@ -463,7 +463,7 @@ bot.action(/^gift_confirm_(\d+)$/, async (ctx) => {
         {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
-                [Markup.button.url('📤 Поделиться ссылкой', `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent('🎁 Дарю тебе подписку на Psychosis VPN!')}`)],
+                [Markup.button.url('📤 Поделиться ссылкой', `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent('🎁 Дарю тебе подписку ${pkg.days} дней на Psychosis VPN!')}`)],
                 [Markup.button.callback('👤 В профиль', 'back_to_profile')],
                 [Markup.button.callback('🛒 В магазин', 'buy_menu_back')]
             ])
