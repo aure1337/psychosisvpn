@@ -75,7 +75,7 @@ async function renderProfile(ctx, isEdit = false) {
     
     const report = `👤 <b>${s?.internal_name || ctx.from.first_name}</b>\n💰 Баланс: <b>${s?.balance || 0}₽</b>\n🕗 До: <b>${isExpired ? '—' : formatDate(s.expires_at)}</b>\n💎 Тариф: <b>${TARIFF_MAP[s?.tariff_type] || 'Не активна'}</b>\n\n🔗 <code>${subUrl}</code>`;
     
-    const inlineButtons = [[Markup.button.callback('💳 Пополнить баланс', 'topup_fk')]];
+    const inlineButtons = [[Markup.button.callback('💳 Пополнить', 'topup_menu')]];
     if (!s?.test_used && (isExpired || s?.tariff_type === 'none')) {
         inlineButtons.push([Markup.button.callback('🎁 Тест-период (5 дн.)', 'activate_test_profile')]);
     }
@@ -226,14 +226,66 @@ bot.hears('👤 Профиль', async (ctx) => {
     await renderProfile(ctx, false);
 });
 
-// --- ОПЛАТА ЧЕРЕЗ FREEKASSA (ПОПОЛНЕНИЕ) ---
-bot.action('topup_fk', async (ctx) => {
-    userStates[ctx.from.id] = { action: 'topup_amount', msgId: ctx.callbackQuery.message.message_id };
-    await ctx.editMessageText('💵 <b>Введите сумму пополнения</b> (в рублях, минимум 10₽):', {
-        parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'back_to_profile')]])
-    });
+// ========== НОВОЕ МЕНЮ ПОПОЛНЕНИЯ ==========
+bot.action('topup_menu', async (ctx) => {
+    const username = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name;
+    
+    await ctx.editMessageText(
+        `💳 <b>Пополнение баланса</b>\n\n` +
+        `👤 ${username}\n\n` +
+        `<i>Выберите тип пополнения:</i>`,
+        {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('💰 Пополнить свой баланс', 'topup_self')],
+                [Markup.button.callback('🎁 Купить подарочную карту', 'topup_gift')],
+                [Markup.button.callback('⬅️ Назад', 'back_to_profile')]
+            ])
+        }
+    );
 });
+
+// Пополнение своего баланса
+bot.action('topup_self', async (ctx) => {
+    userStates[ctx.from.id] = { 
+        action: 'topup_amount_self', 
+        msgId: ctx.callbackQuery.message.message_id 
+    };
+    
+    await ctx.editMessageText(
+        '💰 <b>Пополнение своего баланса</b>\n\n' +
+        'Введите сумму пополнения в рублях (минимум 10₽):',
+        {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Отмена', 'topup_menu')]
+            ])
+        }
+    );
+});
+
+// Покупка подарочной карты на рубли
+bot.action('topup_gift', async (ctx) => {
+    userStates[ctx.from.id] = { 
+        action: 'topup_amount_gift', 
+        msgId: ctx.callbackQuery.message.message_id 
+    };
+    
+    await ctx.editMessageText(
+        '🎁 <b>Покупка подарочной карты</b>\n\n' +
+        'Введите номинал подарочной карты в рублях (минимум 10₽):\n\n' +
+        '<i>После оплаты вы получите ссылку, которую можно отправить другу. ' +
+        'При активации друг получит указанную сумму на баланс.</i>',
+        {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Отмена', 'topup_menu')]
+            ])
+        }
+    );
+});
+
+// ========== КОНЕЦ МЕНЮ ПОПОЛНЕНИЯ ==========
 
 bot.action('activate_test_profile', async (ctx) => {
     const userId = ctx.from.id.toString();
@@ -327,11 +379,9 @@ bot.action(/^buy_gift_(\d+)$/, async (ctx) => {
     const pkg = PRICES[idx];
     const userId = ctx.from.id.toString();
     
-    // Проверяем баланс
     const { data: s } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', userId).maybeSingle();
     
     if (!s || s.balance < pkg.price) {
-        // Недостаточно средств - предлагаем оплатить картой
         return ctx.editMessageText(
             `⚠️ <b>Недостаточно средств на балансе!</b>\n\n` +
             `💰 Ваш баланс: ${s?.balance || 0}₽\n` +
@@ -341,14 +391,13 @@ bot.action(/^buy_gift_(\d+)$/, async (ctx) => {
                 parse_mode: 'HTML',
                 ...Markup.inlineKeyboard([
                     [Markup.button.callback('💳 Оплатить картой (FreeKassa)', `gift_fk_${idx}`)],
-                    [Markup.button.callback('💵 Пополнить баланс', 'topup_fk')],
+                    [Markup.button.callback('💵 Пополнить баланс', 'topup_menu')],
                     [Markup.button.callback('⬅️ Назад', `buy_select_${idx}`)]
                 ])
             }
         );
     }
     
-    // Баланса достаточно - показываем подтверждение
     await ctx.editMessageText(
         `🎁 <b>Подарок другу</b>\n\n` +
         `📦 Тариф: Обход + Впн\n` +
@@ -367,13 +416,11 @@ bot.action(/^buy_gift_(\d+)$/, async (ctx) => {
     );
 });
 
-// Подтверждение оплаты с баланса для подарка
 bot.action(/^gift_confirm_(\d+)$/, async (ctx) => {
     const idx = ctx.match[1];
     const pkg = PRICES[idx];
     const userId = ctx.from.id.toString();
     
-    // Повторно проверяем баланс
     const { data: s } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', userId).maybeSingle();
     
     if (!s || s.balance < pkg.price) {
@@ -384,14 +431,13 @@ bot.action(/^gift_confirm_(\d+)$/, async (ctx) => {
                 parse_mode: 'HTML',
                 ...Markup.inlineKeyboard([
                     [Markup.button.callback('💳 Оплатить картой', `gift_fk_${idx}`)],
-                    [Markup.button.callback('💵 Пополнить баланс', 'topup_fk')],
+                    [Markup.button.callback('💵 Пополнить баланс', 'topup_menu')],
                     [Markup.button.callback('⬅️ Назад', `buy_gift_${idx}`)]
                 ])
             }
         );
     }
     
-    // Списываем с баланса и создаём подарок
     await supabase.from('vpn_subs').update({ balance: s.balance - pkg.price }).eq('tg_chat_id', userId);
     
     const code = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
@@ -425,14 +471,12 @@ bot.action(/^gift_confirm_(\d+)$/, async (ctx) => {
     );
 });
 
-// Оплата подарка картой через FreeKassa
 bot.action(/^gift_fk_(\d+)$/, async (ctx) => {
     const idx = ctx.match[1];
     const pkg = PRICES[idx];
     const orderId = `GIFT_${ctx.from.id}_${idx}_${Date.now()}`;
     const link = generateFkLink(pkg.price, orderId);
     
-    // Сохраняем в стейт инфу о подарке
     userStates[ctx.from.id] = { 
         action: 'waiting_gift_payment',
         giftIdx: idx,
@@ -517,7 +561,9 @@ bot.action('adm_gift_type_rub', (ctx) => {
     ctx.editMessageText('Сумма пополнения (₽)?', Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'admin_menu_back')]])); 
 });
 
-// Промокоды (Админ)
+// ========== ОБНОВЛЁННЫЙ БЛОК ПРОМОКОДОВ (С РЕДАКТИРОВАНИЕМ) ==========
+
+// Промокоды (Админ) - список
 bot.action('admin_promo_list', async (ctx) => {
     await cleanupExpiredPromos();
     const { data: promos } = await supabase.from('promocodes').select('*');
@@ -527,6 +573,7 @@ bot.action('admin_promo_list', async (ctx) => {
     await ctx.editMessageText('<b>Управление промокодами:</b>', { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
 });
 
+// Создание нового промокода
 bot.action('admin_promo_add', (ctx) => {
     userStates[ctx.from.id] = { action: 'adm_promo_step1', msgId: ctx.callbackQuery.message.message_id };
     ctx.editMessageText('Название для промокода?\n\n<i>Пример: SUMMER2025, NEW_USER, VIP</i>', { 
@@ -535,30 +582,235 @@ bot.action('admin_promo_add', (ctx) => {
     });
 });
 
+// Управление конкретным промокодом (просмотр)
 bot.action(/^manage_promo_(.+)$/, async (ctx) => {
-    const { data: p } = await supabase.from('promocodes').select('*').eq('id', ctx.match[1]).single();
+    const promoId = ctx.match[1];
+    const { data: p } = await supabase.from('promocodes').select('*').eq('id', promoId).single();
+    const botInfo = await ctx.telegram.getMe();
+    const promoLink = `https://t.me/${botInfo.username}?start=${p.code}`;
+    
     const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('✏️ Редактировать', `promo_edit_${p.id}`)],
         [Markup.button.callback('🔄 Обнулить', `promo_reset_${p.id}`), Markup.button.callback('🗑 Удалить', `promo_del_${p.id}`)],
+        [Markup.button.callback('📋 Копировать ссылку', `promo_copy_${p.id}`)],
         [Markup.button.callback('⬅️ Назад', 'admin_promo_list')]
     ]);
+    
     await ctx.editMessageText(
-        `🎟 <b>${p.code}</b>\n\nДает: ${p.days} дн. / ${p.bonus_rub}₽\nЮзов: ${p.used_count}/${p.max_uses}\nТариф: ${TARIFF_MAP[p.tariff_type]}`, 
+        `🎟 <b>${p.code}</b>\n\n` +
+        `📊 <b>Статистика:</b>\n` +
+        `├ Использовано: ${p.used_count}/${p.max_uses}\n` +
+        `├ Даёт дней: ${p.days}\n` +
+        `├ Рублей на баланс: ${p.bonus_rub || 0}₽\n` +
+        `└ Тариф: ${TARIFF_MAP[p.tariff_type]}\n\n` +
+        `🔗 <b>Ссылка:</b>\n<code>${promoLink}</code>`,
         { parse_mode: 'HTML', ...kb }
     );
 });
 
+// Копирование ссылки промокода
+bot.action(/^promo_copy_(.+)$/, async (ctx) => {
+    const promoId = ctx.match[1];
+    const { data: p } = await supabase.from('promocodes').select('code').eq('id', promoId).single();
+    const botInfo = await ctx.telegram.getMe();
+    const promoLink = `https://t.me/${botInfo.username}?start=${p.code}`;
+    
+    await ctx.answerCbQuery('✅ Ссылка скопирована! (см. сообщение выше)', { show_alert: true });
+    
+    await ctx.editMessageText(
+        ctx.callbackQuery.message.text + '\n\n✅ <i>Ссылка скопирована в буфер обмена!</i>',
+        { 
+            parse_mode: 'HTML', 
+            ...Markup.inlineKeyboard(ctx.callbackQuery.message.reply_markup.inline_keyboard)
+        }
+    );
+});
+
+// ========== РЕДАКТИРОВАНИЕ ПРОМОКОДА ==========
+bot.action(/^promo_edit_(.+)$/, async (ctx) => {
+    const promoId = ctx.match[1];
+    const { data: p } = await supabase.from('promocodes').select('*').eq('id', promoId).single();
+    
+    userStates[ctx.from.id] = { 
+        action: 'promo_edit_menu', 
+        promoId: promoId,
+        promoData: p,
+        msgId: ctx.callbackQuery.message.message_id 
+    };
+    
+    const kb = Markup.inlineKeyboard([
+        [Markup.button.callback(`📝 Название: ${p.code}`, 'promo_edit_name')],
+        [Markup.button.callback(`📅 Дни: ${p.days}`, 'promo_edit_days')],
+        [Markup.button.callback(`💰 Рубли: ${p.bonus_rub || 0}₽`, 'promo_edit_rub')],
+        [Markup.button.callback(`🔢 Макс. активаций: ${p.max_uses}`, 'promo_edit_max_uses')],
+        [Markup.button.callback(`💎 Тариф: ${TARIFF_MAP[p.tariff_type]}`, 'promo_edit_tariff')],
+        [Markup.button.callback('✅ Сохранить и выйти', `manage_promo_${promoId}`)],
+        [Markup.button.callback('❌ Отменить', `manage_promo_${promoId}`)]
+    ]);
+    
+    await ctx.editMessageText(
+        `✏️ <b>Редактирование промокода</b>\n\n` +
+        `<code>${p.code}</code>\n\n` +
+        `<i>Выберите, что хотите изменить:</i>`,
+        { parse_mode: 'HTML', ...kb }
+    );
+});
+
+// Редактирование названия
+bot.action('promo_edit_name', async (ctx) => {
+    const state = userStates[ctx.from.id];
+    if (!state) return ctx.answerCbQuery('Ошибка состояния');
+    
+    state.action = 'promo_edit_name_input';
+    await ctx.editMessageText(
+        `📝 <b>Текущее название:</b> <code>${state.promoData.code}</code>\n\n` +
+        `Введите новое название для промокода:`,
+        { 
+            parse_mode: 'HTML', 
+            ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]])
+        }
+    );
+});
+
+// Редактирование дней
+bot.action('promo_edit_days', async (ctx) => {
+    const state = userStates[ctx.from.id];
+    if (!state) return ctx.answerCbQuery('Ошибка состояния');
+    
+    state.action = 'promo_edit_days_input';
+    await ctx.editMessageText(
+        `📅 <b>Текущее количество дней:</b> ${state.promoData.days}\n\n` +
+        `Введите новое количество дней (0 - если только рубли):`,
+        { 
+            parse_mode: 'HTML', 
+            ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]])
+        }
+    );
+});
+
+// Редактирование рублей
+bot.action('promo_edit_rub', async (ctx) => {
+    const state = userStates[ctx.from.id];
+    if (!state) return ctx.answerCbQuery('Ошибка состояния');
+    
+    state.action = 'promo_edit_rub_input';
+    await ctx.editMessageText(
+        `💰 <b>Текущая сумма на баланс:</b> ${state.promoData.bonus_rub || 0}₽\n\n` +
+        `Введите новую сумму в рублях (0 - если только дни):`,
+        { 
+            parse_mode: 'HTML', 
+            ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]])
+        }
+    );
+});
+
+// Редактирование максимальных активаций
+bot.action('promo_edit_max_uses', async (ctx) => {
+    const state = userStates[ctx.from.id];
+    if (!state) return ctx.answerCbQuery('Ошибка состояния');
+    
+    state.action = 'promo_edit_max_uses_input';
+    await ctx.editMessageText(
+        `🔢 <b>Текущее макс. активаций:</b> ${state.promoData.max_uses}\n` +
+        `📊 <b>Использовано:</b> ${state.promoData.used_count}\n\n` +
+        `Введите новое максимальное количество активаций:`,
+        { 
+            parse_mode: 'HTML', 
+            ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]])
+        }
+    );
+});
+
+// Редактирование тарифа
+bot.action('promo_edit_tariff', async (ctx) => {
+    const state = userStates[ctx.from.id];
+    if (!state) return ctx.answerCbQuery('Ошибка состояния');
+    
+    const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('Обход + Впн', 'promo_set_tariff_both')],
+        [Markup.button.callback('Обход', 'promo_set_tariff_white')],
+        [Markup.button.callback('Базовый Впн', 'promo_set_tariff_base')],
+        [Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]
+    ]);
+    
+    await ctx.editMessageText(
+        `💎 <b>Текущий тариф:</b> ${TARIFF_MAP[state.promoData.tariff_type]}\n\n` +
+        `Выберите новый тариф:`,
+        { parse_mode: 'HTML', ...kb }
+    );
+});
+
+// Установка тарифа
+bot.action(/^promo_set_tariff_(.+)$/, async (ctx) => {
+    const state = userStates[ctx.from.id];
+    if (!state) return ctx.answerCbQuery('Ошибка состояния');
+    
+    const newTariff = ctx.match[1];
+    state.promoData.tariff_type = newTariff;
+    
+    await ctx.answerCbQuery(`✅ Тариф изменён на: ${TARIFF_MAP[newTariff]}`);
+    
+    const kb = Markup.inlineKeyboard([
+        [Markup.button.callback(`📝 Название: ${state.promoData.code}`, 'promo_edit_name')],
+        [Markup.button.callback(`📅 Дни: ${state.promoData.days}`, 'promo_edit_days')],
+        [Markup.button.callback(`💰 Рубли: ${state.promoData.bonus_rub || 0}₽`, 'promo_edit_rub')],
+        [Markup.button.callback(`🔢 Макс. активаций: ${state.promoData.max_uses}`, 'promo_edit_max_uses')],
+        [Markup.button.callback(`💎 Тариф: ${TARIFF_MAP[state.promoData.tariff_type]}`, 'promo_edit_tariff')],
+        [Markup.button.callback('✅ Сохранить и выйти', `manage_promo_${state.promoId}`)],
+        [Markup.button.callback('❌ Отменить', `manage_promo_${state.promoId}`)]
+    ]);
+    
+    await ctx.editMessageText(
+        `✏️ <b>Редактирование промокода</b>\n\n` +
+        `<code>${state.promoData.code}</code>\n\n` +
+        `<i>Выберите, что хотите изменить:</i>`,
+        { parse_mode: 'HTML', ...kb }
+    );
+});
+
+// Обнуление промокода
 bot.action(/^promo_reset_(.+)$/, async (ctx) => {
     await supabase.from('promocodes').update({ used_count: 0 }).eq('id', ctx.match[1]);
     await supabase.from('promo_activations').delete().eq('promo_id', ctx.match[1]);
-    ctx.answerCbQuery('✅ Обнулено');
-    await ctx.editMessageText('✅ Обнулено.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'admin_promo_list')]]));
+    ctx.answerCbQuery('✅ Использования обнулены');
+    
+    const { data: p } = await supabase.from('promocodes').select('*').eq('id', ctx.match[1]).single();
+    const botInfo = await ctx.telegram.getMe();
+    const promoLink = `https://t.me/${botInfo.username}?start=${p.code}`;
+    
+    const kb = Markup.inlineKeyboard([
+        [Markup.button.callback('✏️ Редактировать', `promo_edit_${p.id}`)],
+        [Markup.button.callback('🔄 Обнулить', `promo_reset_${p.id}`), Markup.button.callback('🗑 Удалить', `promo_del_${p.id}`)],
+        [Markup.button.callback('📋 Копировать ссылку', `promo_copy_${p.id}`)],
+        [Markup.button.callback('⬅️ Назад', 'admin_promo_list')]
+    ]);
+    
+    await ctx.editMessageText(
+        `🎟 <b>${p.code}</b>\n\n` +
+        `📊 <b>Статистика:</b>\n` +
+        `├ Использовано: ${p.used_count}/${p.max_uses}\n` +
+        `├ Даёт дней: ${p.days}\n` +
+        `├ Рублей на баланс: ${p.bonus_rub || 0}₽\n` +
+        `└ Тариф: ${TARIFF_MAP[p.tariff_type]}\n\n` +
+        `🔗 <b>Ссылка:</b>\n<code>${promoLink}</code>`,
+        { parse_mode: 'HTML', ...kb }
+    );
 });
 
+// Удаление промокода
 bot.action(/^promo_del_(.+)$/, async (ctx) => {
     await supabase.from('promocodes').delete().eq('id', ctx.match[1]);
-    ctx.answerCbQuery('✅ Удалено');
-    await ctx.editMessageText('✅ Удалено.', Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'admin_promo_list')]]));
+    ctx.answerCbQuery('✅ Промокод удалён');
+    
+    await cleanupExpiredPromos();
+    const { data: promos } = await supabase.from('promocodes').select('*');
+    const buttons = (promos || []).map(p => [Markup.button.callback(`${p.code} (${p.used_count}/${p.max_uses})`, `manage_promo_${p.id}`)]);
+    buttons.push([Markup.button.callback('➕ Создать новый', 'admin_promo_add')]);
+    buttons.push([Markup.button.callback('⬅️ Назад', 'admin_menu_back')]);
+    await ctx.editMessageText('<b>Управление промокодами:</b>', { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
 });
+
+// ========== КОНЕЦ БЛОКА ПРОМОКОДОВ ==========
 
 // Управление юзерами (Админ)
 bot.action('admin_users', (ctx) => renderUsersList(ctx, 0));
@@ -660,24 +912,200 @@ bot.on('text', async (ctx, next) => {
             return await processPromoCode(ctx, userId, input, state.msgId);
         }
 
-        // --- ПОПОЛНЕНИЕ ЧЕРЕЗ FREEKASSA ---
-        if (state.action === 'topup_amount') {
+        // --- ПОПОЛНЕНИЕ СВОЕГО БАЛАНСА ---
+        if (state.action === 'topup_amount_self') {
             const amount = parseInt(input);
             if (isNaN(amount) || amount < 10) {
                 return editPrompt('❌ Минимальная сумма — 10₽. Введите корректную сумму:', 
-                    [[Markup.button.callback('❌ Отмена', 'back_to_profile')]]);
+                    [[Markup.button.callback('❌ Отмена', 'topup_menu')]]);
             }
             const orderId = `BILL_${userId}_${Date.now()}`;
             const link = generateFkLink(amount, orderId);
             
-            const sent = await editPrompt(
-                `💳 <b>Пополнение на ${amount}₽</b>\n\nСообщение удалится через 5 минут или после оплаты.`, 
+            await editPrompt(
+                `💳 <b>Пополнение своего баланса на ${amount}₽</b>\n\nСообщение удалится через 5 минут или после оплаты.`, 
                 [[Markup.button.url('💳 Перейти к оплате', link)], [Markup.button.callback('👤 В профиль', 'back_to_profile')]]
             );
             
             await savePaymentMsg(orderId, userId, state.msgId);
             setTimeout(() => safeDelete(userId, state.msgId), 300000);
             delete userStates[userId];
+            return;
+        }
+
+        // --- ПОКУПКА ПОДАРОЧНОЙ КАРТЫ НА РУБЛИ ---
+        if (state.action === 'topup_amount_gift') {
+            const amount = parseInt(input);
+            if (isNaN(amount) || amount < 10) {
+                return editPrompt('❌ Минимальная сумма — 10₽. Введите корректную сумму:', 
+                    [[Markup.button.callback('❌ Отмена', 'topup_menu')]]);
+            }
+            const orderId = `GIFTRUB_${userId}_${Date.now()}`;
+            const link = generateFkLink(amount, orderId);
+            
+            await editPrompt(
+                `🎁 <b>Покупка подарочной карты на ${amount}₽</b>\n\n` +
+                `После оплаты вы получите ссылку-подарок, которую можно отправить другу.\n` +
+                `При активации друг получит ${amount}₽ на баланс.\n\n` +
+                `Сообщение удалится через 5 минут или после оплаты.`,
+                [[Markup.button.url('💳 Перейти к оплате', link)], [Markup.button.callback('⬅️ Назад', 'topup_menu')]]
+            );
+            
+            await savePaymentMsg(orderId, userId, state.msgId);
+            setTimeout(() => safeDelete(userId, state.msgId), 300000);
+            delete userStates[userId];
+            return;
+        }
+
+        // --- РЕДАКТИРОВАНИЕ ПРОМОКОДОВ (ВВОД ТЕКСТА) ---
+        if (state.action === 'promo_edit_name_input') {
+            const newName = input.toUpperCase().substring(0, 30);
+            
+            const { data: existing } = await supabase.from('promocodes')
+                .select('id')
+                .eq('code', newName)
+                .neq('id', state.promoId)
+                .maybeSingle();
+                
+            if (existing) {
+                return editPrompt(
+                    `❌ Промокод <b>${newName}</b> уже существует!\n\nВведите другое название:`,
+                    [[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]]
+                );
+            }
+            
+            state.promoData.code = newName;
+            await supabase.from('promocodes').update({ code: newName }).eq('id', state.promoId);
+            
+            await ctx.answerCbQuery('✅ Название обновлено').catch(() => {});
+            
+            state.action = 'promo_edit_menu';
+            const kb = Markup.inlineKeyboard([
+                [Markup.button.callback(`📝 Название: ${state.promoData.code}`, 'promo_edit_name')],
+                [Markup.button.callback(`📅 Дни: ${state.promoData.days}`, 'promo_edit_days')],
+                [Markup.button.callback(`💰 Рубли: ${state.promoData.bonus_rub || 0}₽`, 'promo_edit_rub')],
+                [Markup.button.callback(`🔢 Макс. активаций: ${state.promoData.max_uses}`, 'promo_edit_max_uses')],
+                [Markup.button.callback(`💎 Тариф: ${TARIFF_MAP[state.promoData.tariff_type]}`, 'promo_edit_tariff')],
+                [Markup.button.callback('✅ Сохранить и выйти', `manage_promo_${state.promoId}`)],
+                [Markup.button.callback('❌ Отменить', `manage_promo_${state.promoId}`)]
+            ]);
+            
+            await editPrompt(
+                `✏️ <b>Редактирование промокода</b>\n\n` +
+                `<code>${state.promoData.code}</code>\n\n` +
+                `<i>Выберите, что хотите изменить:</i>`,
+                kb
+            );
+            return;
+        }
+        
+        if (state.action === 'promo_edit_days_input') {
+            const days = parseInt(input);
+            if (isNaN(days) || days < 0) {
+                return editPrompt(
+                    '❌ Введите корректное число дней (0 или больше):',
+                    [[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]]
+                );
+            }
+            
+            state.promoData.days = days;
+            await supabase.from('promocodes').update({ days: days }).eq('id', state.promoId);
+            
+            await ctx.answerCbQuery('✅ Дни обновлены').catch(() => {});
+            
+            state.action = 'promo_edit_menu';
+            const kb = Markup.inlineKeyboard([
+                [Markup.button.callback(`📝 Название: ${state.promoData.code}`, 'promo_edit_name')],
+                [Markup.button.callback(`📅 Дни: ${state.promoData.days}`, 'promo_edit_days')],
+                [Markup.button.callback(`💰 Рубли: ${state.promoData.bonus_rub || 0}₽`, 'promo_edit_rub')],
+                [Markup.button.callback(`🔢 Макс. активаций: ${state.promoData.max_uses}`, 'promo_edit_max_uses')],
+                [Markup.button.callback(`💎 Тариф: ${TARIFF_MAP[state.promoData.tariff_type]}`, 'promo_edit_tariff')],
+                [Markup.button.callback('✅ Сохранить и выйти', `manage_promo_${state.promoId}`)],
+                [Markup.button.callback('❌ Отменить', `manage_promo_${state.promoId}`)]
+            ]);
+            
+            await editPrompt(
+                `✏️ <b>Редактирование промокода</b>\n\n` +
+                `<code>${state.promoData.code}</code>\n\n` +
+                `<i>Выберите, что хотите изменить:</i>`,
+                kb
+            );
+            return;
+        }
+        
+        if (state.action === 'promo_edit_rub_input') {
+            const rub = parseInt(input);
+            if (isNaN(rub) || rub < 0) {
+                return editPrompt(
+                    '❌ Введите корректную сумму (0 или больше):',
+                    [[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]]
+                );
+            }
+            
+            state.promoData.bonus_rub = rub;
+            await supabase.from('promocodes').update({ bonus_rub: rub }).eq('id', state.promoId);
+            
+            await ctx.answerCbQuery('✅ Рубли обновлены').catch(() => {});
+            
+            state.action = 'promo_edit_menu';
+            const kb = Markup.inlineKeyboard([
+                [Markup.button.callback(`📝 Название: ${state.promoData.code}`, 'promo_edit_name')],
+                [Markup.button.callback(`📅 Дни: ${state.promoData.days}`, 'promo_edit_days')],
+                [Markup.button.callback(`💰 Рубли: ${state.promoData.bonus_rub || 0}₽`, 'promo_edit_rub')],
+                [Markup.button.callback(`🔢 Макс. активаций: ${state.promoData.max_uses}`, 'promo_edit_max_uses')],
+                [Markup.button.callback(`💎 Тариф: ${TARIFF_MAP[state.promoData.tariff_type]}`, 'promo_edit_tariff')],
+                [Markup.button.callback('✅ Сохранить и выйти', `manage_promo_${state.promoId}`)],
+                [Markup.button.callback('❌ Отменить', `manage_promo_${state.promoId}`)]
+            ]);
+            
+            await editPrompt(
+                `✏️ <b>Редактирование промокода</b>\n\n` +
+                `<code>${state.promoData.code}</code>\n\n` +
+                `<i>Выберите, что хотите изменить:</i>`,
+                kb
+            );
+            return;
+        }
+        
+        if (state.action === 'promo_edit_max_uses_input') {
+            const maxUses = parseInt(input);
+            if (isNaN(maxUses) || maxUses < 1) {
+                return editPrompt(
+                    '❌ Введите число от 1 до 1000000:',
+                    [[Markup.button.callback('❌ Отмена', `promo_edit_${state.promoId}`)]]
+                );
+            }
+            
+            if (maxUses < state.promoData.used_count) {
+                await supabase.from('promo_activations').delete().eq('promo_id', state.promoId);
+                state.promoData.used_count = 0;
+            }
+            
+            state.promoData.max_uses = maxUses;
+            await supabase.from('promocodes').update({ 
+                max_uses: maxUses,
+                used_count: maxUses < state.promoData.used_count ? 0 : state.promoData.used_count
+            }).eq('id', state.promoId);
+            
+            await ctx.answerCbQuery('✅ Макс. активаций обновлено').catch(() => {});
+            
+            state.action = 'promo_edit_menu';
+            const kb = Markup.inlineKeyboard([
+                [Markup.button.callback(`📝 Название: ${state.promoData.code}`, 'promo_edit_name')],
+                [Markup.button.callback(`📅 Дни: ${state.promoData.days}`, 'promo_edit_days')],
+                [Markup.button.callback(`💰 Рубли: ${state.promoData.bonus_rub || 0}₽`, 'promo_edit_rub')],
+                [Markup.button.callback(`🔢 Макс. активаций: ${state.promoData.max_uses}`, 'promo_edit_max_uses')],
+                [Markup.button.callback(`💎 Тариф: ${TARIFF_MAP[state.promoData.tariff_type]}`, 'promo_edit_tariff')],
+                [Markup.button.callback('✅ Сохранить и выйти', `manage_promo_${state.promoId}`)],
+                [Markup.button.callback('❌ Отменить', `manage_promo_${state.promoId}`)]
+            ]);
+            
+            await editPrompt(
+                `✏️ <b>Редактирование промокода</b>\n\n` +
+                `<code>${state.promoData.code}</code>\n\n` +
+                `<i>Выберите, что хотите изменить:</i>`,
+                kb
+            );
             return;
         }
 
@@ -840,7 +1268,6 @@ module.exports = async (req, res) => {
         const checkSign = crypto.createHash('md5').update(`${FK_ID}:${AMOUNT}:${FK_KEY2}:${MERCHANT_ORDER_ID}`).digest('hex');
         
         if (SIGN === checkSign) {
-            // Мгновенное удаление кнопки оплаты
             const { data: payLog } = await supabase.from('payment_messages')
                 .select('*')
                 .eq('order_id', MERCHANT_ORDER_ID)
@@ -874,11 +1301,9 @@ module.exports = async (req, res) => {
                     await bot.telegram.sendMessage(tgId, `💎 <b>Оплата принята!</b>\n\nПодписка продлена до: ${formatDate(newDate)}\nСпасибо за покупку!`, { parse_mode: 'HTML' });
                 }
             }
-            // ========== ОБРАБОТКА GIFT ПЛАТЕЖЕЙ ==========
             else if (orderParts[0] === 'GIFT') {
                 const pkg = PRICES[orderParts[2]];
                 
-                // Создаём подарок
                 const code = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
                 await supabase.from('promocodes').insert([{ 
                     code: code, 
@@ -906,7 +1331,39 @@ module.exports = async (req, res) => {
                     }
                 );
             }
-            // ========== КОНЕЦ ОБРАБОТКИ GIFT ==========
+            // ========== ОБРАБОТКА ПОДАРОЧНЫХ КАРТ НА РУБЛИ ==========
+            else if (orderParts[0] === 'GIFTRUB') {
+                const rubAmount = parseFloat(AMOUNT);
+                
+                const code = `GIFTRUB_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+                await supabase.from('promocodes').insert([{ 
+                    code: code, 
+                    tariff_type: 'none', 
+                    days: 0, 
+                    max_uses: 1, 
+                    bonus_rub: rubAmount, 
+                    used_count: 0 
+                }]);
+                
+                const botInfo = await bot.telegram.getMe();
+                const giftLink = `https://t.me/${botInfo.username}?start=${code}`;
+                
+                await bot.telegram.sendMessage(
+                    tgId, 
+                    `✅ <b>Подарочная карта оплачена!</b>\n\n` +
+                    `🎁 <b>Номинал:</b> ${rubAmount}₽\n\n` +
+                    `🔗 <b>Ссылка-подарок:</b>\n` +
+                    `<code>${giftLink}</code>\n\n` +
+                    `<i>Отправьте эту ссылку другу! При активации он получит ${rubAmount}₽ на баланс.</i>`,
+                    { 
+                        parse_mode: 'HTML',
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.url('📤 Поделиться', `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent(`🎁 Дарю тебе ${rubAmount}₽ на баланс Psychosis VPN!`)}`)]
+                        ])
+                    }
+                );
+            }
+            // ========== КОНЕЦ ОБРАБОТКИ ПОДАРОЧНЫХ КАРТ ==========
             return res.status(200).send('YES');
         }
         return res.status(400).send('Wrong sign');
