@@ -49,6 +49,10 @@ function generateFkLink(amount, orderId) {
     return `https://pay.freekassa.ru/?m=${FK_ID}&oa=${amount}&o=${orderId}&s=${sign}&currency=RUB`;
 }
 
+function generateShareToken() {
+    return 'sh_' + crypto.randomBytes(12).toString('hex'); // sh_ + 24 символа
+}
+
 async function safeDelete(ctx, msgId = null) {
     try {
         const cid = ctx.from?.id || ctx.chat?.id || ctx;
@@ -70,7 +74,6 @@ async function savePaymentMsg(orderId, chatId, msgId) {
 async function canShareDays(giverSubId, receiverSubId) {
     const today = new Date().toISOString().split('T')[0];
     
-    // Проверяем, не дарил ли уже сегодня этому же человеку
     const { data: existing } = await supabase.from('days_shares')
         .select('id')
         .eq('giver_sub_id', giverSubId)
@@ -102,7 +105,6 @@ async function renderProfile(ctx, isEdit = false) {
     
     const inlineButtons = [[Markup.button.callback('💳 Пополнить', 'topup_menu')]];
     
-    // Кнопка "Поделиться днями" только если есть активная подписка не из теста
     if (!isExpired && s?.tariff_type !== 'none' && !s?.profile_title?.includes('TEST')) {
         inlineButtons.push([Markup.button.callback('🔗 Поделиться днями', 'create_share_link')]);
     }
@@ -236,17 +238,17 @@ bot.start(async (ctx) => {
     await ctx.reply('🚀 Psychosis VPN запущен!\n\n⚡ Быстрый VPN для России и обхода блокировок', 
         Markup.keyboard(buttons).resize());
 
-    // ========== ОБРАБОТКА SHARE ==========
+    // ========== ОБРАБОТКА SHARE (ТЕПЕРЬ С ТОКЕНОМ) ==========
     if (ctx.payload && ctx.payload.startsWith('share_')) {
-        const targetSubId = ctx.payload.replace('share_', '');
+        const token = ctx.payload.replace('share_', '');
         
         const { data: targetSub } = await supabase.from('vpn_subs')
             .select('internal_name, tg_chat_id, id')
-            .eq('id', targetSubId)
+            .eq('share_token', token)
             .maybeSingle();
             
         if (!targetSub) {
-            return ctx.reply('❌ Пользователь не найден');
+            return ctx.reply('❌ Недействительная или устаревшая ссылка!');
         }
         
         const { data: mySub } = await supabase.from('vpn_subs')
@@ -254,12 +256,11 @@ bot.start(async (ctx) => {
             .eq('tg_chat_id', userId)
             .single();
             
-        if (mySub.id === targetSubId) {
+        if (mySub.id === targetSub.id) {
             return ctx.reply('❌ Нельзя подарить дни самому себе!');
         }
         
-        // Проверяем, не дарил ли уже сегодня
-        const canShare = await canShareDays(mySub.id, targetSubId);
+        const canShare = await canShareDays(mySub.id, targetSub.id);
         if (!canShare) {
             return ctx.reply(
                 `❌ Вы уже дарили дни этому пользователю сегодня!\n\n` +
@@ -269,13 +270,12 @@ bot.start(async (ctx) => {
         
         userStates[userId] = {
             action: 'share_days',
-            targetSubId: targetSubId,
+            targetSubId: targetSub.id,
             targetName: targetSub.internal_name,
             targetChatId: targetSub.tg_chat_id,
             mySubId: mySub.id
         };
         
-        // Инфо о функции с предупреждением
         await ctx.reply(
             `⚠️ <b>Внимание! Это тестовая функция.</b>\n` +
             `При использовании могут возникнуть баги, пишите: ${TELEGRAM_ADMIN}\n\n` +
@@ -293,7 +293,6 @@ bot.start(async (ctx) => {
             }
         );
     }
-    // ========== ОБЫЧНЫЕ ПРОМОКОДЫ ==========
     else if (ctx.payload) {
         await processPromoCode(ctx, userId, ctx.payload);
     }
@@ -315,11 +314,11 @@ bot.hears('👤 Профиль', async (ctx) => {
     await renderProfile(ctx, false);
 });
 
-// ========== КНОПКА "ПОДЕЛИТЬСЯ ДНЯМИ" ==========
+// ========== КНОПКА "ПОДЕЛИТЬСЯ ДНЯМИ" (С ТОКЕНОМ) ==========
 bot.action('create_share_link', async (ctx) => {
     const userId = ctx.from.id.toString();
     const { data: mySub } = await supabase.from('vpn_subs')
-        .select('id, expires_at, profile_title')
+        .select('id, expires_at, profile_title, share_token')
         .eq('tg_chat_id', userId)
         .single();
         
@@ -333,8 +332,17 @@ bot.action('create_share_link', async (ctx) => {
         return ctx.answerCbQuery('❌ Нельзя делиться днями из тестового периода!', { show_alert: true });
     }
     
+    // Генерируем или получаем существующий токен
+    let token = mySub.share_token;
+    if (!token) {
+        token = generateShareToken();
+        await supabase.from('vpn_subs')
+            .update({ share_token: token })
+            .eq('id', mySub.id);
+    }
+    
     const botInfo = await ctx.telegram.getMe();
-    const shareLink = `https://t.me/${botInfo.username}?start=share_${mySub.id}`;
+    const shareLink = `https://t.me/${botInfo.username}?start=share_${token}`;
     
     await ctx.editMessageText(
         `⚠️ <b>Внимание! Это тестовая функция.</b>\n` +
@@ -1122,7 +1130,6 @@ bot.on('text', async (ctx, next) => {
                 );
             }
             
-            // Проверяем, не дарил ли уже сегодня
             const canShare = await canShareDays(mySub.id, state.targetSubId);
             if (!canShare) {
                 return editPrompt(
@@ -1136,11 +1143,9 @@ bot.on('text', async (ctx, next) => {
                 .eq('id', state.targetSubId)
                 .single();
             
-            // Вычитаем дни у дарителя
             const newMyDate = new Date(mySub.expires_at);
             newMyDate.setDate(newMyDate.getDate() - daysToGive);
             
-            // Добавляем дни получателю
             const newTargetDate = addDaysToDate(targetSub.expires_at, daysToGive);
             
             await supabase.from('vpn_subs')
@@ -1155,10 +1160,8 @@ bot.on('text', async (ctx, next) => {
                 })
                 .eq('id', targetSub.id);
             
-            // Записываем факт передачи
             await recordDaysShare(mySub.id, targetSub.id, daysToGive);
             
-            // Уведомляем обоих
             await ctx.replyWithHTML(
                 `✅ <b>Вы успешно подарили ${daysToGive} дн. подписки!</b>\n\n` +
                 `👤 Получатель: ${state.targetName}\n` +
