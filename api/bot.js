@@ -321,25 +321,142 @@ bot.action(/^buy_confirm_(\d+)$/, async (ctx) => {
     });
 });
 
+// ========== НОВАЯ ЛОГИКА ПОДАРКОВ ==========
 bot.action(/^buy_gift_(\d+)$/, async (ctx) => {
-    const pkg = PRICES[ctx.match[1]];
+    const idx = ctx.match[1];
+    const pkg = PRICES[idx];
     const userId = ctx.from.id.toString();
-    const { data: s } = await supabase.from('vpn_subs').select('*').eq('tg_chat_id', userId).maybeSingle();
-    if (s.balance < pkg.price) return ctx.answerCbQuery('❌ Недостаточно средств!', { show_alert: true });
-    await supabase.from('vpn_subs').update({ balance: s.balance - pkg.price }).eq('id', s.id);
-    const code = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
-    await supabase.from('promocodes').insert([{ 
-        code: code, tariff_type: 'both', days: pkg.days, max_uses: 1, bonus_rub: 0, used_count: 0 
-    }]);
-    const botInfo = await ctx.telegram.getMe();
+    
+    // Проверяем баланс
+    const { data: s } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', userId).maybeSingle();
+    
+    if (!s || s.balance < pkg.price) {
+        // Недостаточно средств - предлагаем оплатить картой
+        return ctx.editMessageText(
+            `⚠️ <b>Недостаточно средств на балансе!</b>\n\n` +
+            `💰 Ваш баланс: ${s?.balance || 0}₽\n` +
+            `💎 Стоимость подарка: ${pkg.price}₽\n\n` +
+            `Выберите способ оплаты:`,
+            {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('💳 Оплатить картой (FreeKassa)', `gift_fk_${idx}`)],
+                    [Markup.button.callback('💵 Пополнить баланс', 'topup_fk')],
+                    [Markup.button.callback('⬅️ Назад', `buy_select_${idx}`)]
+                ])
+            }
+        );
+    }
+    
+    // Баланса достаточно - показываем подтверждение
     await ctx.editMessageText(
-        `🎁 <b>Подарок создан!</b>\n\nСкопируй и отправь другу:\n<code>https://t.me/${botInfo.username}?start=${code}</code>`, 
-        { 
+        `🎁 <b>Подарок другу</b>\n\n` +
+        `📦 Тариф: Обход + Впн\n` +
+        `⏳ Срок: ${pkg.days} дней\n` +
+        `💰 Спишется с баланса: ${pkg.price}₽\n` +
+        `💳 Ваш баланс: ${s.balance}₽\n\n` +
+        `<i>После создания вы получите ссылку-подарок, которую можно отправить другу</i>`,
+        {
             parse_mode: 'HTML',
-            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад в меню', 'buy_menu_back')]])
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('✅ Подтвердить и оплатить', `gift_confirm_${idx}`)],
+                [Markup.button.callback('💳 Оплатить картой вместо баланса', `gift_fk_${idx}`)],
+                [Markup.button.callback('⬅️ Назад', `buy_select_${idx}`)]
+            ])
         }
     );
 });
+
+// Подтверждение оплаты с баланса для подарка
+bot.action(/^gift_confirm_(\d+)$/, async (ctx) => {
+    const idx = ctx.match[1];
+    const pkg = PRICES[idx];
+    const userId = ctx.from.id.toString();
+    
+    // Повторно проверяем баланс
+    const { data: s } = await supabase.from('vpn_subs').select('balance').eq('tg_chat_id', userId).maybeSingle();
+    
+    if (!s || s.balance < pkg.price) {
+        await ctx.answerCbQuery('❌ Недостаточно средств!', { show_alert: true });
+        return ctx.editMessageText(
+            `⚠️ <b>Недостаточно средств!</b>\n\nБаланс: ${s?.balance || 0}₽\nНужно: ${pkg.price}₽`,
+            {
+                parse_mode: 'HTML',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('💳 Оплатить картой', `gift_fk_${idx}`)],
+                    [Markup.button.callback('💵 Пополнить баланс', 'topup_fk')],
+                    [Markup.button.callback('⬅️ Назад', `buy_gift_${idx}`)]
+                ])
+            }
+        );
+    }
+    
+    // Списываем с баланса и создаём подарок
+    await supabase.from('vpn_subs').update({ balance: s.balance - pkg.price }).eq('tg_chat_id', userId);
+    
+    const code = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    await supabase.from('promocodes').insert([{ 
+        code: code, 
+        tariff_type: 'both', 
+        days: pkg.days, 
+        max_uses: 1, 
+        bonus_rub: 0, 
+        used_count: 0 
+    }]);
+    
+    const botInfo = await ctx.telegram.getMe();
+    const giftLink = `https://t.me/${botInfo.username}?start=${code}`;
+    
+    await ctx.editMessageText(
+        `✅ <b>Подарок успешно создан!</b>\n\n` +
+        `💰 С баланса списано: ${pkg.price}₽\n` +
+        `💳 Остаток на балансе: ${s.balance - pkg.price}₽\n\n` +
+        `🎁 <b>Ссылка-подарок:</b>\n` +
+        `<code>${giftLink}</code>\n\n` +
+        `<i>Отправь эту ссылку другу. При активации он получит ${pkg.days} дней подписки!</i>`,
+        {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.url('📤 Поделиться ссылкой', `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent('🎁 Дарю тебе подписку на Psychosis VPN!')}`)],
+                [Markup.button.callback('👤 В профиль', 'back_to_profile')],
+                [Markup.button.callback('🛒 В магазин', 'buy_menu_back')]
+            ])
+        }
+    );
+});
+
+// Оплата подарка картой через FreeKassa
+bot.action(/^gift_fk_(\d+)$/, async (ctx) => {
+    const idx = ctx.match[1];
+    const pkg = PRICES[idx];
+    const orderId = `GIFT_${ctx.from.id}_${idx}_${Date.now()}`;
+    const link = generateFkLink(pkg.price, orderId);
+    
+    // Сохраняем в стейт инфу о подарке
+    userStates[ctx.from.id] = { 
+        action: 'waiting_gift_payment',
+        giftIdx: idx,
+        orderId: orderId
+    };
+    
+    const sent = await ctx.editMessageText(
+        `🎁 <b>Оплата подарка: ${pkg.price}₽</b>\n\n` +
+        `После оплаты подарок будет создан автоматически.\n` +
+        `Сообщение удалится через 5 минут или после оплаты.`,
+        {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+                [Markup.button.url('💳 Перейти к оплате', link)],
+                [Markup.button.callback('⬅️ Назад', `buy_gift_${idx}`)]
+            ])
+        }
+    );
+
+    await savePaymentMsg(orderId, ctx.from.id, sent.message_id);
+    setTimeout(() => safeDelete(ctx.from.id, sent.message_id), 300000);
+});
+
+// ========== КОНЕЦ НОВОЙ ЛОГИКИ ПОДАРКОВ ==========
 
 // --- АДМИН-ПАНЕЛЬ ---
 bot.hears('🛠 Админ-панель', async (ctx) => {
@@ -757,6 +874,39 @@ module.exports = async (req, res) => {
                     await bot.telegram.sendMessage(tgId, `💎 <b>Оплата принята!</b>\n\nПодписка продлена до: ${formatDate(newDate)}\nСпасибо за покупку!`, { parse_mode: 'HTML' });
                 }
             }
+            // ========== ОБРАБОТКА GIFT ПЛАТЕЖЕЙ ==========
+            else if (orderParts[0] === 'GIFT') {
+                const pkg = PRICES[orderParts[2]];
+                
+                // Создаём подарок
+                const code = `GIFT_${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+                await supabase.from('promocodes').insert([{ 
+                    code: code, 
+                    tariff_type: 'both', 
+                    days: pkg.days, 
+                    max_uses: 1, 
+                    bonus_rub: 0, 
+                    used_count: 0 
+                }]);
+                
+                const botInfo = await bot.telegram.getMe();
+                const giftLink = `https://t.me/${botInfo.username}?start=${code}`;
+                
+                await bot.telegram.sendMessage(
+                    tgId, 
+                    `✅ <b>Оплата подарка получена!</b>\n\n` +
+                    `🎁 <b>Ваша ссылка-подарок:</b>\n` +
+                    `<code>${giftLink}</code>\n\n` +
+                    `<i>Отправьте эту ссылку другу! При активации он получит ${pkg.days} дней подписки.</i>`,
+                    { 
+                        parse_mode: 'HTML',
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.url('📤 Поделиться', `https://t.me/share/url?url=${encodeURIComponent(giftLink)}&text=${encodeURIComponent('🎁 Дарю тебе подписку на Psychosis VPN!')}`)]
+                        ])
+                    }
+                );
+            }
+            // ========== КОНЕЦ ОБРАБОТКИ GIFT ==========
             return res.status(200).send('YES');
         }
         return res.status(400).send('Wrong sign');
